@@ -1,0 +1,1100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoQuest: Territorial GPS Game</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- LeafletJS for Maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+    <!-- Turf.js for Geospatial Analysis -->
+    <script src='https://unpkg.com/@turf/turf@6/turf.min.js'></script>
+
+    <style>
+        /* Ensure the map fills the screen */
+        body {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+        }
+        #map {
+            flex-grow: 1;
+            background-color: #e5e7eb; /* A light gray background for the map container */
+        }
+        /* Custom Leaflet icon style to make it more visible */
+        .leaflet-marker-icon {
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
+        }
+        /* Simple spinner for loading state */
+        .spinner {
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3498db;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        /* Toast notification for interception */
+        .toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #ef4444;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            z-index: 2000;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .toast.show {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <!-- Map Container -->
+    <div id="map"></div>
+
+    <!-- UI Overlay -->
+    <div id="overlay" class="fixed bottom-4 left-4 right-4 md:bottom-8 md:left-auto md:right-8 md:w-96 bg-white/95 backdrop-blur-sm p-5 rounded-2xl shadow-2xl text-center z-[1000] transform transition-transform duration-300 translate-y-0">
+        <div class="flex justify-between items-center mb-2">
+            <h1 class="text-2xl font-bold text-gray-800">GeoQuest</h1>
+            <div class="text-sm text-gray-500">
+                <span id="connection-status">•</span> <span id="server-status">Offline</span>
+            </div>
+        </div>
+        
+        <!-- Player name input -->
+        <div class="mb-3">
+            <input type="text" id="player-name" placeholder="Your name" class="w-full p-2 border rounded-lg text-center" />
+        </div>
+        
+        <p id="status" class="text-gray-600 my-2">Press Start to Begin</p>
+        <p id="stats" class="text-sm font-medium text-gray-700 mb-4">Captured Territories: 0 | Score: 0</p>
+        
+        <button id="toggle-tracking-btn" class="w-full bg-green-500 text-white font-bold py-3 px-6 rounded-full text-lg shadow-lg hover:bg-green-600 active:scale-95 transition-all duration-200 ease-in-out">
+            Start
+        </button>
+        
+        <button id="generate-lore-btn" class="hidden w-full bg-purple-500 text-white font-bold py-3 px-6 rounded-full text-lg shadow-lg hover:bg-purple-600 active:scale-95 transition-all duration-200 ease-in-out mt-3 items-center justify-center">
+            <span id="lore-btn-text">✨ Generate Territory Lore</span>
+            <div id="lore-btn-spinner" class="spinner hidden"></div>
+        </button>
+        
+        <div class="mt-3 flex justify-between items-center">
+            <label class="flex items-center space-x-2 text-sm text-gray-600">
+                <input type="checkbox" id="multiplayer-toggle" checked class="rounded" />
+                <span>Multiplayer</span>
+            </label>
+            <button id="reset-btn" class="text-sm text-red-500 hover:underline">Reset Data</button>
+        </div>
+    </div>
+    
+    <!-- Permission/Error/Lore Modal -->
+    <div id="modal" class="hidden fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl text-center">
+            <h2 id="modal-title" class="text-xl font-bold mb-2"></h2>
+            <p id="modal-message" class="text-gray-600 mb-6 whitespace-pre-wrap"></p>
+            <button id="modal-close-btn" class="bg-blue-500 text-white font-bold py-2 px-8 rounded-full hover:bg-blue-600 transition-colors">OK</button>
+        </div>
+    </div>
+
+    <!-- Debug Panel (hidden in production) -->
+    <div id="debug-panel" class="hidden fixed bottom-4 left-4 p-4 bg-white/90 backdrop-blur-sm rounded-xl shadow-xl z-[1500] w-64">
+        <h3 class="font-bold text-gray-800 mb-2">Debug Controls</h3>
+        <button id="simulate-btn" class="w-full bg-amber-500 text-white py-2 px-4 rounded mb-2">Simulate Path</button>
+        <button id="intercept-btn" class="w-full bg-red-500 text-white py-2 px-4 rounded mb-2">Test Interception</button>
+        <div class="text-xs text-gray-500 mt-2">Press 'd' to toggle debug panel</div>
+    </div>
+
+    <script>
+        // --- Global State & Constants ---
+        const USER_COLOR = '#3498db'; // A nice blue
+        const TERRITORY_COLOR = 'rgba(52, 152, 219, 0.3)';
+        const MIN_TERRITORY_AREA_M2 = 100; // Minimum area to capture (m²)
+        const JITTER_THRESHOLD_M = 3; // Ignore movements less than 3m
+        const PATH_SYNC_INTERVAL_MS = 3000; // Sync active path every 3s
+        const WORLD_POLL_INTERVAL_MS = 2000; // Check for others' paths every 2s
+
+        let map = null;
+        let userMarker = null;
+        let currentPathPolyline = null;
+        
+        let isTracking = false;
+        let watchId = null;
+        let pathSyncInterval = null;
+        let worldPollInterval = null;
+        
+        let pathCoordinates = []; // Stores {lat, lng} objects
+        let territories = []; // Stores {id, polygon: L.Polygon, center: [lat, lng], area: number, owner: string}
+        let score = 0;
+        let playerName = '';
+        
+        // Multiplayer state
+        let multiplayerEnabled = true;
+        let activePaths = new Map(); // Maps player name to array of coordinates
+        let activePathLayers = new Map(); // Maps player name to L.Polyline
+        let serverAvailable = false;
+
+        // --- DOM Elements ---
+        const toggleBtn = document.getElementById('toggle-tracking-btn');
+        const generateLoreBtn = document.getElementById('generate-lore-btn');
+        const loreBtnText = document.getElementById('lore-btn-text');
+        const loreBtnSpinner = document.getElementById('lore-btn-spinner');
+        const statusEl = document.getElementById('status');
+        const statsEl = document.getElementById('stats');
+        const modal = document.getElementById('modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalMessage = document.getElementById('modal-message');
+        const modalCloseBtn = document.getElementById('modal-close-btn');
+        const playerNameInput = document.getElementById('player-name');
+        const multiplayerToggle = document.getElementById('multiplayer-toggle');
+        const connectionStatus = document.getElementById('connection-status');
+        const serverStatusEl = document.getElementById('server-status');
+        const resetBtn = document.getElementById('reset-btn');
+        const debugPanel = document.getElementById('debug-panel');
+        const simulateBtn = document.getElementById('simulate-btn');
+        const interceptBtn = document.getElementById('intercept-btn');
+
+        // --- Initialization ---
+        document.addEventListener('DOMContentLoaded', () => {
+            loadFromLocalStorage();
+            initializeMap();
+            
+            toggleBtn.addEventListener('click', handleToggleTracking);
+            generateLoreBtn.addEventListener('click', handleGenerateLore);
+            modalCloseBtn.addEventListener('click', () => modal.classList.add('hidden'));
+            playerNameInput.addEventListener('change', handlePlayerNameChange);
+            multiplayerToggle.addEventListener('change', handleMultiplayerToggle);
+            resetBtn.addEventListener('click', handleReset);
+            
+            // Debug panel
+            document.addEventListener('keydown', e => {
+                if (e.key === 'd') debugPanel.classList.toggle('hidden');
+            });
+            simulateBtn.addEventListener('click', simulatePathCapture);
+            interceptBtn.addEventListener('click', simulateInterception);
+            
+            updateUI();
+            
+            // If multiplayer is enabled, start polling
+            if (multiplayerEnabled) {
+                startWorldPolling();
+            }
+        });
+
+        function loadFromLocalStorage() {
+            try {
+                const savedData = localStorage.getItem('geoquest_data');
+                if (savedData) {
+                    const data = JSON.parse(savedData);
+                    territories = data.territories || [];
+                    score = data.score || 0;
+                    playerName = data.playerName || '';
+                }
+            } catch (e) {
+                console.error('Error loading from local storage:', e);
+                territories = [];
+                score = 0;
+                playerName = '';
+            }
+            
+            // Set UI with loaded values
+            playerNameInput.value = playerName || generateRandomName();
+            
+            if (!playerName) {
+                playerName = playerNameInput.value;
+                saveToLocalStorage();
+            }
+        }
+
+        function saveToLocalStorage() {
+            try {
+                const data = {
+                    territories: territories,
+                    score: score,
+                    playerName: playerName
+                };
+                localStorage.setItem('geoquest_data', JSON.stringify(data));
+            } catch (e) {
+                console.error('Error saving to local storage:', e);
+                showAlert('Error', 'Failed to save your game data locally.');
+            }
+        }
+        
+        function generateRandomName() {
+            const adjectives = ['Swift', 'Mighty', 'Clever', 'Brave', 'Silent', 'Mystic'];
+            const nouns = ['Falcon', 'Wolf', 'Tiger', 'Eagle', 'Panda', 'Fox'];
+            
+            const randomAdjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+            const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
+            
+            return `${randomAdjective}${randomNoun}`;
+        }
+
+        function initializeMap() {
+            // Initialize map centered on a default location
+            map = L.map('map').setView([51.505, -0.09], 13);
+
+            // Add a tile layer from OpenStreetMap
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // Attempt to get user's current location to center the map
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const { latitude, longitude } = position.coords;
+                    map.setView([latitude, longitude], 16);
+                },
+                () => {
+                    showAlert('Welcome!', 'Could not get initial location. The map is set to a default view.');
+                },
+                { enableHighAccuracy: true }
+            );
+            
+            // Restore territories from saved data
+            restoreTerritories();
+        }
+        
+        function restoreTerritories() {
+            for (const territory of territories) {
+                // Only restore the visual elements
+                if (territory.coords) {
+                    const polygon = L.polygon(territory.coords, {
+                        color: territory.owner === playerName ? USER_COLOR : getPlayerColor(territory.owner),
+                        fillColor: territory.owner === playerName ? TERRITORY_COLOR : `rgba(${Math.random()*255}, ${Math.random()*255}, ${Math.random()*255}, 0.3)`,
+                        fillOpacity: 0.5,
+                        weight: 2
+                    }).addTo(map);
+                    
+                    // Add click handler for territory info
+                    polygon.on('click', () => {
+                        const areaText = `${Math.round(territory.area)} square meters`;
+                        const loreText = territory.lore ? `\n\nLore: ${territory.lore}` : '';
+                        showAlert(`Territory by ${territory.owner}`, `Area: ${areaText}${loreText}`);
+                    });
+                    
+                    territory.polygon = polygon;
+                }
+            }
+        }
+
+        // --- Geolocation & Tracking Logic ---
+        function handleToggleTracking() {
+            isTracking = !isTracking;
+            updateUI();
+            
+            if (isTracking) {
+                startWatchingPosition();
+                if (multiplayerEnabled) {
+                    startPathSyncing();
+                }
+            } else {
+                stopWatchingPosition();
+                stopPathSyncing();
+                
+                // Clean up the active path from the server when stopped manually
+                if (multiplayerEnabled) {
+                    deleteActivePath();
+                }
+            }
+        }
+        
+        function handlePlayerNameChange() {
+            const newName = playerNameInput.value.trim();
+            if (newName && newName !== playerName) {
+                playerName = newName;
+                saveToLocalStorage();
+                
+                // Update existing territories with new owner color
+                for (const territory of territories) {
+                    if (territory.owner === playerName && territory.polygon) {
+                        territory.polygon.setStyle({ color: USER_COLOR });
+                    }
+                }
+            }
+        }
+        
+        function handleMultiplayerToggle() {
+            multiplayerEnabled = multiplayerToggle.checked;
+            
+            if (multiplayerEnabled) {
+                startWorldPolling();
+                if (isTracking) {
+                    startPathSyncing();
+                }
+            } else {
+                stopWorldPolling();
+                stopPathSyncing();
+                
+                // Clean up other players' active paths from the map
+                for (const [otherPlayer, polyline] of activePathLayers.entries()) {
+                    if (otherPlayer !== playerName) {
+                        map.removeLayer(polyline);
+                    }
+                }
+                activePathLayers.clear();
+                activePaths.clear();
+            }
+        }
+        
+        function handleReset() {
+            if (confirm('Are you sure you want to reset your data? This will clear all your territories and score.')) {
+                // Remove all territory polygons from the map
+                for (const territory of territories) {
+                    if (territory.polygon) {
+                        map.removeLayer(territory.polygon);
+                    }
+                }
+                
+                territories = [];
+                score = 0;
+                saveToLocalStorage();
+                updateUI();
+            }
+        }
+        
+        function startWatchingPosition() {
+            pathCoordinates = []; // Reset path
+            if (currentPathPolyline) {
+                map.removeLayer(currentPathPolyline);
+                currentPathPolyline = null;
+            }
+            generateLoreBtn.classList.add('hidden'); // Hide lore button on new run
+
+            const geoOptions = {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            };
+
+            watchId = navigator.geolocation.watchPosition(onLocationSuccess, onLocationError, geoOptions);
+        }
+
+        function stopWatchingPosition() {
+            if (watchId) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
+        }
+        
+        function startPathSyncing() {
+            // Clear any existing interval
+            stopPathSyncing();
+            
+            // Sync the path immediately, then start the interval
+            syncActivePath();
+            pathSyncInterval = setInterval(syncActivePath, PATH_SYNC_INTERVAL_MS);
+        }
+        
+        function stopPathSyncing() {
+            if (pathSyncInterval) {
+                clearInterval(pathSyncInterval);
+                pathSyncInterval = null;
+            }
+        }
+        
+        function startWorldPolling() {
+            // Clear any existing interval
+            stopWorldPolling();
+            
+            // Poll immediately, then start interval
+            pollWorldState();
+            worldPollInterval = setInterval(pollWorldState, WORLD_POLL_INTERVAL_MS);
+        }
+        
+        function stopWorldPolling() {
+            if (worldPollInterval) {
+                clearInterval(worldPollInterval);
+                worldPollInterval = null;
+            }
+        }
+        
+        function onLocationSuccess(position) {
+            const { latitude, longitude } = position.coords;
+            const newCoord = { lat: latitude, lng: longitude };
+            
+            // Ignore if the movement is too small (reduces GPS jitter)
+            if (pathCoordinates.length > 0) {
+                const lastPoint = pathCoordinates[pathCoordinates.length - 1];
+                const distance = turf.distance(
+                    turf.point([lastPoint.lng, lastPoint.lat]),
+                    turf.point([longitude, latitude]),
+                    { units: 'meters' }
+                );
+                
+                if (distance < JITTER_THRESHOLD_M) {
+                    return;
+                }
+            }
+            
+            if (pathCoordinates.length === 0) {
+                 map.setView(newCoord, 18);
+            }
+
+            pathCoordinates.push(newCoord);
+            updateMapElements(newCoord);
+            
+            // Check for interception by other players first
+            if (multiplayerEnabled && checkForInterception()) {
+                // If intercepted, we stop here
+                return;
+            }
+            
+            // If not intercepted, check if we completed a loop
+            checkForTerritoryCapture(pathCoordinates);
+        }
+        
+        function onLocationError(error) {
+            console.error(`Geolocation Error: ${error.message}`);
+            stopWatchingPosition();
+            isTracking = false;
+            updateUI();
+            showAlert('Location Error', 'Could not get your location. Please ensure location services are enabled and permissions are granted.');
+        }
+
+        // --- Map Drawing Logic ---
+        function updateMapElements(currentCoord) {
+            if (!userMarker) {
+                userMarker = L.marker(currentCoord).addTo(map).bindPopup("You are here!").openPopup();
+            } else {
+                userMarker.setLatLng(currentCoord);
+            }
+            
+            if (pathCoordinates.length > 1) {
+                if (!currentPathPolyline) {
+                    currentPathPolyline = L.polyline(pathCoordinates, { color: USER_COLOR, weight: 5 }).addTo(map);
+                } else {
+                    currentPathPolyline.setLatLngs(pathCoordinates);
+                }
+            }
+        }
+        
+        // --- Multiplayer Interception Logic ---
+        function checkForInterception() {
+            if (pathCoordinates.length < 2) {
+                return false;
+            }
+            
+            // For each active path from other players
+            for (const [otherPlayer, path] of activePaths.entries()) {
+                // Skip our own path
+                if (otherPlayer === playerName) {
+                    continue;
+                }
+                
+                // Need at least 2 points to make a line
+                if (!path || path.length < 2) {
+                    continue;
+                }
+                
+                // Convert our path to a Turf lineString
+                const myPathCoords = pathCoordinates.map(p => [p.lng, p.lat]);
+                const myPath = turf.lineString(myPathCoords);
+                
+                // Convert the other path to a Turf lineString
+                const theirPathCoords = path.map(p => [p.lng, p.lat]);
+                const theirPath = turf.lineString(theirPathCoords);
+                
+                // Check for intersection
+                const intersection = turf.lineIntersect(myPath, theirPath);
+                
+                if (intersection.features.length > 0) {
+                    // Intersection detected!
+                    handleInterception(otherPlayer);
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+        
+        function handleInterception(interceptor) {
+            // Show notification
+            showToast(`Your path was intercepted by ${interceptor}!`);
+            
+            // Reset path
+            pathCoordinates = [];
+            if (currentPathPolyline) {
+                map.removeLayer(currentPathPolyline);
+                currentPathPolyline = null;
+            }
+            
+            // Delete our active path from the server
+            if (multiplayerEnabled) {
+                deleteActivePath();
+            }
+        }
+        
+        // --- Territory Capture Logic ---
+        function checkForTerritoryCapture(currentPath) {
+            if (currentPath.length < 4) return;
+
+            const latestPoint = [currentPath[currentPath.length - 1].lng, currentPath[currentPath.length - 1].lat];
+            const secondLatestPoint = [currentPath[currentPath.length - 2].lng, currentPath[currentPath.length - 2].lat];
+            
+            const latestLineSegment = turf.lineString([secondLatestPoint, latestPoint]);
+
+            for (let i = 0; i < currentPath.length - 3; i++) {
+                const pathSegment = turf.lineString([
+                    [currentPath[i].lng, currentPath[i].lat],
+                    [currentPath[i+1].lng, currentPath[i+1].lat]
+                ]);
+
+                const intersection = turf.lineIntersect(latestLineSegment, pathSegment);
+                if (intersection.features.length > 0) {
+                    const intersectionPoint = intersection.features[0].geometry.coordinates;
+                    
+                    // Create a closed ring for the polygon
+                    const ring = [
+                        intersectionPoint,
+                        ...currentPath.slice(i + 1, currentPath.length).map(p => [p.lng, p.lat]),
+                        intersectionPoint
+                    ];
+                    
+                    // Ensure the ring follows GeoJSON convention (counter-clockwise for outer rings)
+                    const ringWithoutClose = ring.slice(0, -1);
+                    if (turf.booleanClockwise(ringWithoutClose)) {
+                        ringWithoutClose.reverse();
+                    }
+                    const correctRing = [...ringWithoutClose, ringWithoutClose[0]];
+                    
+                    // Create the polygon and calculate area
+                    const turfPolygon = turf.polygon([correctRing]);
+                    const area = turf.area(turfPolygon);
+                    
+                    // Skip if area is too small
+                    if (area < MIN_TERRITORY_AREA_M2) {
+                        continue;
+                    }
+                    
+                    const center = turf.centerOfMass(turfPolygon).geometry.coordinates;
+                    
+                    // Convert coordinates to [lat, lng] format for Leaflet
+                    const latLngCoords = correctRing.map(coord => [coord[1], coord[0]]);
+                    
+                    // Create the polygon on the map
+                    const polygon = L.polygon(latLngCoords, {
+                        color: USER_COLOR,
+                        fillColor: TERRITORY_COLOR,
+                        fillOpacity: 0.5,
+                        weight: 2
+                    }).addTo(map);
+                    
+                    // Generate a unique ID
+                    const id = `territory_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+                    
+                    // Create territory record
+                    const territory = {
+                        id,
+                        polygon,
+                        coords: latLngCoords,
+                        center: [center[1], center[0]],
+                        area,
+                        owner: playerName,
+                        timestamp: new Date().toISOString()
+                    };
+                    
+                    // Add click handler for territory info
+                    polygon.on('click', () => {
+                        const areaText = `${Math.round(area)} square meters`;
+                        const loreText = territory.lore ? `\n\nLore: ${territory.lore}` : '';
+                        showAlert('Your Territory', `Area: ${areaText}${loreText}`);
+                    });
+                    
+                    territories.push(territory);
+                    
+                    // Update score (1 point per 100 m², minimum 1 point)
+                    const points = Math.max(1, Math.round(area / 100));
+                    score += points;
+                    
+                    // Restart path from the intersection point
+                    pathCoordinates = [{ lat: intersectionPoint[1], lng: intersectionPoint[0] }];
+                    if (currentPathPolyline) {
+                        currentPathPolyline.setLatLngs(pathCoordinates);
+                    }
+                    
+                    // Save to local storage
+                    saveToLocalStorage();
+                    
+                    // Update UI
+                    updateUI();
+                    generateLoreBtn.classList.remove('hidden');
+                    
+                    // Show a success toast
+                    showToast(`Territory captured! +${points} points`);
+                    
+                    // If multiplayer is enabled, sync the new territory and clear active path
+                    if (multiplayerEnabled) {
+                        syncTerritory(territory);
+                        deleteActivePath();
+                    }
+                    
+                    return; 
+                }
+            }
+        }
+        
+        // --- Server Communication ---
+        function syncActivePath() {
+            if (!multiplayerEnabled || !playerName || pathCoordinates.length === 0) {
+                return;
+            }
+            
+            fetch('/api/paths', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    player: playerName,
+                    path: pathCoordinates
+                })
+            })
+            .then(response => {
+                if (response.ok) {
+                    updateServerStatus(true);
+                } else {
+                    updateServerStatus(false);
+                }
+            })
+            .catch(error => {
+                console.error('Error syncing active path:', error);
+                updateServerStatus(false);
+            });
+        }
+        
+        function deleteActivePath() {
+            if (!multiplayerEnabled || !playerName) {
+                return;
+            }
+            
+            fetch('/api/paths', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ player: playerName })
+            })
+            .then(response => {
+                if (response.ok) {
+                    updateServerStatus(true);
+                } else {
+                    updateServerStatus(false);
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting active path:', error);
+                updateServerStatus(false);
+            });
+        }
+        
+        function syncTerritory(territory) {
+            if (!multiplayerEnabled || !playerName) {
+                return;
+            }
+            
+            // We don't send the Leaflet polygon object
+            const territoryData = {
+                id: territory.id,
+                coords: territory.coords,
+                center: territory.center,
+                area: territory.area,
+                owner: territory.owner,
+                timestamp: territory.timestamp,
+                lore: territory.lore
+            };
+            
+            fetch('/api/territories', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(territoryData)
+            })
+            .then(response => {
+                if (response.ok) {
+                    updateServerStatus(true);
+                } else {
+                    updateServerStatus(false);
+                }
+            })
+            .catch(error => {
+                console.error('Error syncing territory:', error);
+                updateServerStatus(false);
+            });
+        }
+        
+        function pollWorldState() {
+            if (!multiplayerEnabled) {
+                return;
+            }
+            
+            // Get active paths
+            fetch('/api/paths')
+                .then(response => {
+                    if (!response.ok) throw new Error('Failed to fetch active paths');
+                    return response.json();
+                })
+                .then(data => {
+                    updateServerStatus(true);
+                    handleActivePaths(data.paths || []);
+                })
+                .catch(error => {
+                    console.error('Error polling active paths:', error);
+                    updateServerStatus(false);
+                });
+                
+            // Get territories
+            fetch('/api/territories')
+                .then(response => {
+                    if (!response.ok) throw new Error('Failed to fetch territories');
+                    return response.json();
+                })
+                .then(data => {
+                    updateServerStatus(true);
+                    handleTerritories(data.territories || []);
+                })
+                .catch(error => {
+                    console.error('Error polling territories:', error);
+                    updateServerStatus(false);
+                });
+        }
+        
+        function handleActivePaths(paths) {
+            // Update our activePaths map
+            const currentPlayers = new Set();
+            
+            for (const pathData of paths) {
+                const { player, path } = pathData;
+                
+                // Skip our own path
+                if (player === playerName) {
+                    continue;
+                }
+                
+                currentPlayers.add(player);
+                
+                // Update the map with this path
+                activePaths.set(player, path);
+                
+                // Draw/update the path on the map
+                updateActivePathOnMap(player, path);
+            }
+            
+            // Remove paths for players not in the current data
+            for (const [existingPlayer] of activePathLayers.entries()) {
+                if (existingPlayer !== playerName && !currentPlayers.has(existingPlayer)) {
+                    // Remove from map
+                    const layer = activePathLayers.get(existingPlayer);
+                    if (layer) {
+                        map.removeLayer(layer);
+                    }
+                    activePathLayers.delete(existingPlayer);
+                    activePaths.delete(existingPlayer);
+                }
+            }
+        }
+        
+        function updateActivePathOnMap(player, path) {
+            const color = getPlayerColor(player);
+            
+            let polyline = activePathLayers.get(player);
+            
+            if (!polyline) {
+                // Create a new polyline
+                polyline = L.polyline(path, {
+                    color: color,
+                    weight: 4,
+                    dashArray: '5,10',
+                    opacity: 0.7
+                }).addTo(map);
+                
+                activePathLayers.set(player, polyline);
+            } else {
+                // Update existing polyline
+                polyline.setLatLngs(path);
+            }
+        }
+        
+        function handleTerritories(serverTerritories) {
+            for (const serverTerritory of serverTerritories) {
+                // Skip territories we already have
+                const existingIndex = territories.findIndex(t => t.id === serverTerritory.id);
+                if (existingIndex !== -1) {
+                    continue;
+                }
+                
+                // Skip our own territories (they're already added locally)
+                if (serverTerritory.owner === playerName) {
+                    continue;
+                }
+                
+                // Add this territory
+                const color = getPlayerColor(serverTerritory.owner);
+                const fillColor = `rgba(${Math.random()*255}, ${Math.random()*255}, ${Math.random()*255}, 0.3)`;
+                
+                // Create the polygon on the map
+                const polygon = L.polygon(serverTerritory.coords, {
+                    color: color,
+                    fillColor: fillColor,
+                    fillOpacity: 0.5,
+                    weight: 2
+                }).addTo(map);
+                
+                // Add click handler for territory info
+                polygon.on('click', () => {
+                    const areaText = `${Math.round(serverTerritory.area)} square meters`;
+                    const loreText = serverTerritory.lore ? `\n\nLore: ${serverTerritory.lore}` : '';
+                    showAlert(`Territory by ${serverTerritory.owner}`, `Area: ${areaText}${loreText}`);
+                });
+                
+                // Add to our local territories list
+                territories.push({
+                    ...serverTerritory,
+                    polygon
+                });
+            }
+        }
+        
+        function updateServerStatus(available) {
+            serverAvailable = available;
+            connectionStatus.style.color = available ? '#10b981' : '#ef4444'; // green or red
+            serverStatusEl.textContent = available ? 'Connected' : 'Unavailable';
+        }
+        
+        // --- Gemini API Integration ---
+        async function handleGenerateLore() {
+            // Find the most recent territory
+            const lastTerritory = territories
+                .filter(t => t.owner === playerName)
+                .sort((a, b) => {
+                    const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                    const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                    return timeB - timeA;
+                })[0];
+                
+            if (!lastTerritory) {
+                showAlert('Error', 'No territory captured yet!');
+                return;
+            }
+
+            setLoreButtonLoading(true);
+
+            const { center, area } = lastTerritory;
+            const prompt = `You are a creative historian for a fictional world. A user has just claimed a piece of land. Write a short, imaginative piece of lore (2-3 paragraphs) about this specific location.
+            
+            Location Coordinates: Latitude ${center[0].toFixed(5)}, Longitude ${center[1].toFixed(5)}
+            Area: Approximately ${area.toFixed(0)} square meters.
+
+            Invent a name for the area, and describe a mythical event, a forgotten ruin, a natural wonder, or a quirky local legend associated with it. Be creative and engaging.`;
+
+            try {
+                // Try to use serverless endpoint if available
+                let lore;
+                if (multiplayerEnabled && serverAvailable) {
+                    lore = await callLoreAPI(prompt, center, area);
+                } else {
+                    lore = await callGeminiAPI(prompt);
+                }
+                
+                // Update territory with lore
+                lastTerritory.lore = lore;
+                saveToLocalStorage();
+                
+                // If multiplayer enabled, sync the updated territory
+                if (multiplayerEnabled) {
+                    syncTerritory(lastTerritory);
+                }
+                
+                showAlert('Territory Lore', lore);
+            } catch (error) {
+                console.error('Lore API Error:', error);
+                showAlert('Error', 'Failed to generate lore. Please try again.');
+            } finally {
+                setLoreButtonLoading(false);
+            }
+        }
+        
+        async function callLoreAPI(prompt, center, area) {
+            const response = await fetch('/api/generate-lore', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    prompt,
+                    center,
+                    area,
+                    player: playerName
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error('Failed to generate lore from server');
+            }
+            
+            const data = await response.json();
+            return data.text;
+        }
+
+        async function callGeminiAPI(prompt, retries = 3, delay = 1000) {
+            // Note: This is a fallback if server-side lore generation isn't available
+            // In a production app, use server-side API calls to protect your API key
+            
+            const apiKey = "YOUR_GEMINI_API_KEY"; // Replace with your key for testing only
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+            };
+            
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API Error: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (text) {
+                    return text;
+                } else {
+                    throw new Error("No content received from API.");
+                }
+            } catch(error) {
+                if (retries > 0) {
+                    console.log(`Retrying API call... attempts left: ${retries - 1}`);
+                    await new Promise(res => setTimeout(res, delay));
+                    return callGeminiAPI(prompt, retries - 1, delay * 2); // Exponential backoff
+                }
+                throw error;
+            }
+        }
+
+        function setLoreButtonLoading(isLoading) {
+            if (isLoading) {
+                generateLoreBtn.disabled = true;
+                loreBtnText.classList.add('hidden');
+                loreBtnSpinner.classList.remove('hidden');
+            } else {
+                generateLoreBtn.disabled = false;
+                loreBtnText.classList.remove('hidden');
+                loreBtnSpinner.classList.add('hidden');
+            }
+        }
+
+        // --- UI Helper Functions ---
+        function updateUI() {
+            if (isTracking) {
+                toggleBtn.textContent = 'Stop';
+                toggleBtn.classList.remove('bg-green-500', 'hover:bg-green-600');
+                toggleBtn.classList.add('bg-red-500', 'hover:bg-red-600');
+                statusEl.textContent = 'Currently Tracking Your Path...';
+            } else {
+                toggleBtn.textContent = 'Start';
+                toggleBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
+                toggleBtn.classList.add('bg-green-500', 'hover:bg-green-600');
+                statusEl.textContent = 'Press Start to Begin';
+            }
+            
+            const myTerritories = territories.filter(t => t.owner === playerName).length;
+            statsEl.textContent = `Captured Territories: ${myTerritories} | Score: ${score}`;
+        }
+        
+        function showAlert(title, message) {
+            modalTitle.textContent = title;
+            modalMessage.textContent = message;
+            modal.classList.remove('hidden');
+        }
+        
+        function showToast(message, duration = 3000) {
+            // Remove any existing toasts
+            const existingToasts = document.querySelectorAll('.toast');
+            existingToasts.forEach(toast => document.body.removeChild(toast));
+            
+            // Create toast
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            // Trigger animation
+            setTimeout(() => toast.classList.add('show'), 10);
+            
+            // Remove after duration
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => document.body.removeChild(toast), 300);
+            }, duration);
+        }
+        
+        function getPlayerColor(playerName) {
+            // Generate a deterministic color based on player name
+            let hash = 0;
+            for (let i = 0; i < playerName.length; i++) {
+                hash = playerName.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            
+            const hue = hash % 360;
+            return `hsl(${hue}, 70%, 45%)`;
+        }
+        
+        // --- Debug/Testing Functions ---
+        function simulatePathCapture() {
+            // Simulate creating a square path for testing
+            const mapCenter = map.getCenter();
+            const size = 0.0003; // roughly 33 meters
+            
+            // Create a square path
+            pathCoordinates = [
+                { lat: mapCenter.lat - size, lng: mapCenter.lng - size },
+                { lat: mapCenter.lat - size, lng: mapCenter.lng + size },
+                { lat: mapCenter.lat + size, lng: mapCenter.lng + size },
+                { lat: mapCenter.lat + size, lng: mapCenter.lng - size },
+                { lat: mapCenter.lat - size, lng: mapCenter.lng - size },
+            ];
+            
+            // Update the path on the map
+            if (currentPathPolyline) {
+                map.removeLayer(currentPathPolyline);
+            }
+            currentPathPolyline = L.polyline(pathCoordinates, { color: USER_COLOR, weight: 5 }).addTo(map);
+            
+            // Trigger territory capture
+            checkForTerritoryCapture(pathCoordinates);
+        }
+        
+        function simulateInterception() {
+            // Create a fake player
+            const interceptor = "TestPlayer";
+            
+            // Add to active paths
+            activePaths.set(interceptor, pathCoordinates.map(p => ({ lat: p.lat + 0.0001, lng: p.lng })));
+            
+            // Draw on map
+            updateActivePathOnMap(interceptor, activePaths.get(interceptor));
+            
+            // Trigger interception
+            handleInterception(interceptor);
+        }
+
+    </script>
+</body>
+</html>
