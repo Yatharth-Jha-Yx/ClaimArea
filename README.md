@@ -40,4 +40,4 @@ GEMINI_API_KEY=your-key npm start
 - Rooms live in server memory. Restarting the server ends all games.
 - An empty room is kept for 2 minutes so a host with a flaky connection can rejoin.
 - If the host leaves, the longest-connected player becomes host.
-- The map uses CARTO's Dark Matter / Positron tiles (switching with the device's light or dark mode). They're free for non-commercial use with attribution; a commercial launch needs a CARTO license or another tile provider.
+- The map uses OpenStreetMap's standard tiles (no API key), restyled with a CSS filter to match the device's light or dark mode. OSM's free tile server is for light use; for a bigger launch, switch `TILE_URL` in `geoquest_Version4.html` to a paid provider.

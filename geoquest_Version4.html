@@ -44,6 +44,7 @@
             --glass-strong: rgba(24, 26, 30, 0.92);
             --scrim: rgba(0, 0, 0, 0.55);
             --map-bg: #0E0F11;
+            --tile-filter: invert(1) hue-rotate(180deg) grayscale(0.85) brightness(0.85) contrast(0.85);
             --shadow: 0 10px 30px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
             --font: 'Roboto', system-ui, -apple-system, 'Segoe UI', sans-serif;
             --mono: 'Roboto Mono', ui-monospace, monospace;
@@ -72,6 +73,7 @@
                 --glass-strong: rgba(255, 255, 255, 0.94);
                 --scrim: rgba(0, 0, 0, 0.32);
                 --map-bg: #F5F5F3;
+                --tile-filter: grayscale(0.85) contrast(0.95) brightness(1.04);
                 --shadow: 0 10px 30px rgba(16, 24, 40, 0.14), 0 2px 8px rgba(16, 24, 40, 0.08);
             }
         }
@@ -466,6 +468,7 @@
 
         /* ─── Map markers & layers ──────────────────────────────────────── */
         .leaflet-container { background: var(--map-bg); font-family: var(--font); }
+        .leaflet-tile-pane { filter: var(--tile-filter); }
         .marker-icon { background: none; border: 0; }
         .me, .peer { position: absolute; left: 0; top: 0; }
         .me-dot {
@@ -622,8 +625,7 @@
         </div>
 
         <div class="attrib">
-            © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
-            · © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>
+            © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
         </div>
     </section>
 
@@ -655,10 +657,8 @@
         // ─── Constants ────────────────────────────────────────────────────────
         // Must match PLAYER_COLORS in server.js
         const PLAYER_COLORS = ['#4C8DF6', '#F28B30', '#1FB5A3', '#E5484D', '#8E6CF0', '#E8B020', '#2BA8E0', '#46B864', '#E25CA8', '#7C8B9E'];
-        const TILES = {
-            dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-            light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
-        };
+        // Keyless OSM tiles, restyled to a minimal dark/light look via the --tile-filter CSS token
+        const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
         const MIN_TERRITORY_AREA_M2 = 100;
         const JITTER_THRESHOLD_M = 3;
         const MAX_ACCURACY_M = 50;
@@ -809,13 +809,8 @@
 
         // ─── Map ──────────────────────────────────────────────────────────────
         function initializeMap() {
-            const lightQuery = window.matchMedia('(prefers-color-scheme: light)');
-            map = L.map('map', { zoomControl: false, attributionControl: false }).setView([51.505, -0.09], 13);
-            tileLayer = L.tileLayer(lightQuery.matches ? TILES.light : TILES.dark, {
-                subdomains: 'abcd',
-                maxZoom: 20
-            }).addTo(map);
-            lightQuery.addEventListener('change', e => tileLayer.setUrl(e.matches ? TILES.light : TILES.dark));
+            map = L.map('map', { zoomControl: false, attributionControl: false, maxZoom: 19 }).setView([51.505, -0.09], 13);
+            tileLayer = L.tileLayer(TILE_URL, { maxZoom: 19 }).addTo(map);
 
             map.on('dragstart', () => setFollow(false));
 
