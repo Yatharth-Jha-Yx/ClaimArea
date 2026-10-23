@@ -310,6 +310,7 @@ io.on('connection', (socket) => {
             territory: territoryView(result.territory),
             captorName: player.name,
             points: result.points,
+            newArea: result.newArea,
             removed: result.removed,
             updated: result.updated.map(territoryView),
             stolen: result.stolen,
@@ -464,7 +465,7 @@ function applyClaim(room, player, id, claimed) {
         if (newScore !== null) scores[owner] = newScore;
     }
 
-    return { territory, points, removed, updated, stolen, scores };
+    return { territory, points, newArea: Math.round(newArea), removed, updated, stolen, scores };
 }
 
 function adjustScore(room, name, delta) {

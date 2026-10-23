@@ -9,7 +9,7 @@
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@500&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,900&family=Roboto+Mono:wght@500&family=Playfair+Display:ital@1&display=swap">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..24,400,0..1,0&display=block">
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
@@ -32,6 +32,7 @@
             --on-error-container: #F9DEDC;
             --success: #6DD58C;
             --warning: #F4C04E;
+            --surface: #111316;
             --surface-2: #1E2024;
             --surface-3: #2A2D32;
             --on-surface: #E3E3E6;
@@ -61,6 +62,7 @@
                 --on-error-container: #410E0B;
                 --success: #188038;
                 --warning: #B06000;
+                --surface: #F8F9FB;
                 --surface-2: #F0F2F5;
                 --surface-3: #E6E9EE;
                 --on-surface: #1B1C1F;
@@ -466,6 +468,68 @@
         .debug-title { margin: 0 4px 2px; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--on-surface-variant); }
         @media (min-width: 768px) { .debug { left: 420px; top: 92px; } }
 
+        /* ─── Run summary & story composer ──────────────────────────────── */
+        .fullscreen {
+            position: fixed;
+            inset: 0;
+            z-index: 2050;
+            overflow-y: auto;
+            background: var(--surface);
+            animation: rise 0.22s ease-out;
+        }
+        @keyframes rise { from { opacity: 0; transform: translateY(16px); } }
+        .panel {
+            max-width: 440px;
+            margin: 0 auto;
+            padding: calc(12px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .panel-header { display: flex; align-items: center; gap: 4px; min-height: 48px; }
+        .panel-header h2 { flex: 1; margin: 0; font-size: 22px; font-weight: 400; }
+        .route-preview { width: 100%; aspect-ratio: 4 / 3; border-radius: 24px; background: var(--surface-2); }
+        .stats-6 { grid-template-columns: repeat(3, 1fr); margin: 0; }
+        .stats-6 .stat-value { font-size: 18px; }
+        .story-wrap { display: flex; justify-content: center; }
+        .story-preview {
+            height: min(56vh, 620px);
+            aspect-ratio: 9 / 16;
+            border-radius: 20px;
+            background-color: #0B0C0E;
+            box-shadow: var(--shadow);
+        }
+        .story-preview.sticker {
+            background-color: #9a9a9a;
+            background-image:
+                linear-gradient(45deg, #7d7d7d 25%, transparent 25%, transparent 75%, #7d7d7d 75%),
+                linear-gradient(45deg, #7d7d7d 25%, transparent 25%, transparent 75%, #7d7d7d 75%);
+            background-size: 24px 24px;
+            background-position: 0 0, 12px 12px;
+        }
+        .segmented {
+            display: flex;
+            border: 1px solid var(--outline);
+            border-radius: 20px;
+            overflow: hidden;
+        }
+        .segmented button {
+            flex: 1;
+            height: 40px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .segmented button + button { border-left: 1px solid var(--outline); }
+        .segmented button[aria-pressed="true"] { background: var(--secondary-container); color: var(--on-secondary-container); }
+        .segmented .icon { font-size: 18px; }
+        .composer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        #share-last-btn { display: none; margin-top: 8px; }
+        .has-run #share-last-btn { display: flex; }
+
         /* ─── Map markers & layers ──────────────────────────────────────── */
         .leaflet-container { background: var(--map-bg); font-family: var(--font); }
         .leaflet-tile-pane { filter: var(--tile-filter); }
@@ -619,6 +683,9 @@
                 <button id="generate-lore-btn" class="btn btn-tonal btn-block state">
                     <span class="icon" aria-hidden="true">auto_awesome</span><span id="lore-btn-text">Generate territory lore</span>
                 </button>
+                <button id="share-last-btn" class="btn btn-tonal btn-block state">
+                    <span class="icon" aria-hidden="true">ios_share</span>Share last run
+                </button>
                 <div class="section-label">Players</div>
                 <ul id="player-list" class="players"></ul>
             </div>
@@ -628,6 +695,59 @@
             © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
         </div>
     </section>
+
+    <!-- Run summary -->
+    <div id="run-summary" class="fullscreen" hidden>
+        <div class="panel">
+            <div class="panel-header">
+                <h2>Run complete</h2>
+                <button id="summary-close" class="icon-btn state" aria-label="Close"><span class="icon" aria-hidden="true">close</span></button>
+            </div>
+            <canvas id="summary-route" class="route-preview" width="880" height="660"></canvas>
+            <div class="stats stats-6">
+                <div class="stat"><div class="stat-label">Distance</div><div id="sum-distance" class="stat-value"></div></div>
+                <div class="stat"><div class="stat-label">Time</div><div id="sum-time" class="stat-value"></div></div>
+                <div class="stat"><div class="stat-label">Pace</div><div id="sum-pace" class="stat-value"></div></div>
+                <div class="stat"><div class="stat-label">Claimed</div><div id="sum-area" class="stat-value"></div></div>
+                <div class="stat"><div class="stat-label">Points</div><div id="sum-points" class="stat-value"></div></div>
+                <div class="stat"><div class="stat-label">Cal</div><div id="sum-cal" class="stat-value"></div></div>
+            </div>
+            <button id="summary-share" class="btn btn-filled btn-block btn-lg state">
+                <span class="icon" aria-hidden="true">ios_share</span>Share to story
+            </button>
+            <button id="summary-done" class="btn btn-text btn-block state">Done</button>
+        </div>
+    </div>
+
+    <!-- Story composer -->
+    <div id="composer" class="fullscreen" hidden>
+        <div class="panel">
+            <div class="panel-header">
+                <button id="composer-back" class="icon-btn state" aria-label="Back"><span class="icon" aria-hidden="true">arrow_back</span></button>
+                <h2>Share run</h2>
+            </div>
+            <div class="story-wrap"><canvas id="story-canvas" class="story-preview" width="1080" height="1920"></canvas></div>
+            <div id="bg-mode" class="segmented" role="group" aria-label="Background">
+                <button data-mode="photo" class="state"><span class="icon" aria-hidden="true">photo_camera</span>Photo</button>
+                <button data-mode="plain" class="state"><span class="icon" aria-hidden="true">contrast</span>Plain</button>
+                <button data-mode="sticker" class="state"><span class="icon" aria-hidden="true">layers</span>Sticker</button>
+            </div>
+            <div id="align-mode" class="segmented" role="group" aria-label="Stats position">
+                <button data-align="left" class="state" aria-label="Left"><span class="icon" aria-hidden="true">format_align_left</span></button>
+                <button data-align="center" class="state" aria-label="Center"><span class="icon" aria-hidden="true">format_align_center</span></button>
+                <button data-align="right" class="state" aria-label="Right"><span class="icon" aria-hidden="true">format_align_right</span></button>
+            </div>
+            <div class="field">
+                <input id="story-caption" type="text" placeholder=" " maxlength="32" autocomplete="off">
+                <label for="story-caption">Caption (optional)</label>
+            </div>
+            <div class="composer-actions">
+                <button id="story-save" class="btn btn-tonal state"><span class="icon" aria-hidden="true">download</span>Save</button>
+                <button id="story-share" class="btn btn-filled state"><span class="icon" aria-hidden="true">ios_share</span>Share</button>
+            </div>
+            <input id="story-photo" type="file" accept="image/*" hidden>
+        </div>
+    </div>
 
     <!-- Snackbar -->
     <div id="snackbar" class="snackbar" role="status" aria-live="polite">
@@ -1168,7 +1288,14 @@
         }
 
         // ── Territory events ──────────────────────────────────────────────────
-        function handleTerritoryCaptured({ territory, captorName, points, removed = [], updated = [], stolen = [], scores = {} }) {
+        function handleTerritoryCaptured({ territory, captorName, points, newArea = 0, removed = [], updated = [], stolen = [], scores = {} }) {
+            if (captorName === playerName && run) {
+                run.area += newArea;
+                run.zones += 1;
+                run.points += points;
+                run.claims.push(territory.coords);
+            }
+
             // Land merged into the new territory, or taken completely
             const gone = new Set(removed);
             for (const t of territories) {
@@ -1219,6 +1346,10 @@
             } else {
                 clearPeerPath(victimName);
                 if (interceptorName === playerName) {
+                    if (run) {
+                        run.points += 10;
+                        run.cuts += 1;
+                    }
                     score = interceptorScore;
                     updateUI();
                     showToast(`You cut ${victimName}'s trail · +10`, 3000, 'success');
@@ -1266,6 +1397,7 @@
                 isTracking = false;
                 stopWatchingPosition();
                 stopPathSyncing();
+                finishRun({ show: false });
             }
             clearRoomFromMap();
             pathCoordinates = [];
@@ -1315,6 +1447,7 @@
             isTracking = !isTracking;
 
             if (isTracking) {
+                startRunLog();
                 startWatchingPosition();
                 startPathSyncing();
                 sheet.classList.add('collapsed');
@@ -1326,6 +1459,7 @@
                 pathCoordinates = [];
                 clearOwnPath();
                 sheet.classList.remove('collapsed');
+                finishRun({ show: true });
             }
             updateUI();
         }
@@ -1411,6 +1545,7 @@
             }
 
             pathCoordinates.push(newCoord);
+            logRunPoint(newCoord);
             drawOwnPath();
             updatePathStat();
 
@@ -1458,6 +1593,7 @@
             stopPathSyncing();
             isTracking = false;
             sheet.classList.remove('collapsed');
+            finishRun({ show: false });
             updateUI();
             showAlert('Location access needed', 'Allow location access for this site in your browser settings, then press Start again.');
         }
@@ -1699,6 +1835,321 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
             clearTimeout(snackTimer);
             snackTimer = setTimeout(() => snackbar.classList.remove('show'), duration);
         }
+
+        // ─── Run recording ────────────────────────────────────────────────────
+        const BODY_WEIGHT_KG = 70;      // for the calorie estimate
+        const STORY_ACCENT = '#FC5200';
+        const STORY_W = 1080;
+        const STORY_H = 1920;
+
+        let run = null;
+        let lastRun = loadLastRun();
+        if (lastRun) document.body.classList.add('has-run');
+
+        function startRunLog() {
+            run = { startedAt: Date.now(), track: [], distance: 0, area: 0, zones: 0, points: 0, cuts: 0, claims: [] };
+        }
+
+        function logRunPoint({ lat, lng }) {
+            if (!run) return;
+            const last = run.track[run.track.length - 1];
+            if (last) run.distance += turf.distance(turf.point([last[1], last[0]]), turf.point([lng, lat]), { units: 'meters' });
+            run.track.push([lat, lng]);
+        }
+
+        function finishRun({ show }) {
+            if (!run) return;
+            const finished = run;
+            run = null;
+            if (finished.track.length < 2 && finished.zones === 0) return;
+
+            const step = Math.ceil(finished.track.length / 400);
+            lastRun = {
+                ...finished,
+                endedAt: Date.now(),
+                track: finished.track.filter((_, i) => i % step === 0 || i === finished.track.length - 1),
+                claims: finished.claims.slice(-20)
+            };
+            try {
+                localStorage.setItem('geoquest_last_run', JSON.stringify(lastRun));
+            } catch (_) { /* too big or storage unavailable; still shareable this session */ }
+            document.body.classList.add('has-run');
+            if (show) openRunSummary();
+        }
+
+        function loadLastRun() {
+            try {
+                return JSON.parse(localStorage.getItem('geoquest_last_run') || 'null');
+            } catch (_) {
+                return null;
+            }
+        }
+
+        function formatDuration(secs) {
+            const h = Math.floor(secs / 3600);
+            const m = Math.floor((secs % 3600) / 60);
+            const s = secs % 60;
+            if (h > 0) return `${h}h ${m}m`;
+            return m > 0 ? `${m}m ${s}s` : `${s}s`;
+        }
+
+        function runStats(r) {
+            const km = r.distance / 1000;
+            const secs = Math.max(1, Math.round((r.endedAt - r.startedAt) / 1000));
+            const paceSec = km >= 0.05 ? Math.round(secs / km) : null;
+            // Stride length shortens as pace slows (running vs walking)
+            const stride = !paceSec ? 0.8 : paceSec <= 390 ? 1.05 : paceSec <= 540 ? 0.9 : 0.75;
+            return {
+                distance: `${km.toFixed(2)} km`,
+                time: formatDuration(secs),
+                pace: paceSec ? `${Math.floor(paceSec / 60)}:${String(paceSec % 60).padStart(2, '0')} /km` : '–',
+                area: `${Math.round(r.area).toLocaleString()} m²`,
+                points: `+${r.points}`,
+                cal: `${Math.round(1.036 * BODY_WEIGHT_KG * km)} Cal`,
+                steps: Math.round(r.distance / stride).toLocaleString()
+            };
+        }
+
+        // ─── Run summary ──────────────────────────────────────────────────────
+        function openRunSummary() {
+            if (!lastRun) return;
+            const s = runStats(lastRun);
+            $('sum-distance').textContent = s.distance;
+            $('sum-time').textContent = s.time;
+            $('sum-pace').textContent = s.pace;
+            $('sum-area').textContent = s.area;
+            $('sum-points').textContent = s.points;
+            $('sum-cal').textContent = s.cal;
+
+            const canvas = $('summary-route');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawRoute(ctx, lastRun, { x: 60, y: 60, w: canvas.width - 120, h: canvas.height - 120 }, 10);
+            $('run-summary').hidden = false;
+        }
+
+        function closeRunSummary() {
+            $('run-summary').hidden = true;
+        }
+
+        // ─── Route drawing (shared by the summary and the story) ──────────────
+        function ringsOf(coords) {
+            // Polygon: [ring, hole…]; MultiPolygon: [[ring, hole…], …]
+            return typeof coords[0][0][0] === 'number' ? coords : coords.flat();
+        }
+
+        function drawRoute(ctx, r, box, lineWidth, fillAlpha = 0.28) {
+            const claimRings = r.claims.flatMap(ringsOf);
+            const all = [...r.track, ...claimRings.flat()];
+            if (all.length === 0) return;
+
+            const lats = all.map(p => p[0]);
+            const lngs = all.map(p => p[1]);
+            const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+            const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+            const cosLat = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180);
+            const spanX = (maxLng - minLng) * cosLat || 1e-9;
+            const spanY = (maxLat - minLat) || 1e-9;
+            const scale = Math.min(box.w / spanX, box.h / spanY);
+            const offX = box.x + (box.w - spanX * scale) / 2;
+            const offY = box.y + (box.h - spanY * scale) / 2;
+            const project = ([lat, lng]) => [offX + (lng - minLng) * cosLat * scale, offY + (maxLat - lat) * scale];
+
+            ctx.save();
+            if (claimRings.length) {
+                ctx.beginPath();
+                for (const ring of claimRings) {
+                    ring.forEach((p, i) => {
+                        const [x, y] = project(p);
+                        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+                    });
+                    ctx.closePath();
+                }
+                ctx.fillStyle = `rgba(252, 82, 0, ${fillAlpha})`;
+                ctx.fill('evenodd');
+            }
+            if (r.track.length > 1) {
+                ctx.beginPath();
+                r.track.forEach((p, i) => {
+                    const [x, y] = project(p);
+                    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+                });
+                ctx.strokeStyle = STORY_ACCENT;
+                ctx.lineWidth = lineWidth;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        // ─── Story composer ───────────────────────────────────────────────────
+        const story = { mode: 'plain', align: 'right', photo: null, caption: '' };
+        const storyCanvas = $('story-canvas');
+        const storyFonts = Promise.all([
+            document.fonts.load('italic 900 80px Roboto'),
+            document.fonts.load('700 60px Roboto'),
+            document.fonts.load('italic 52px "Playfair Display"')
+        ]).catch(() => {});
+
+        function openComposer() {
+            if (!lastRun) return;
+            closeRunSummary();
+            $('composer').hidden = false;
+            syncComposerControls();
+            renderStory();
+        }
+
+        function syncComposerControls() {
+            for (const b of $('bg-mode').children) b.setAttribute('aria-pressed', String(b.dataset.mode === story.mode));
+            for (const b of $('align-mode').children) b.setAttribute('aria-pressed', String(b.dataset.align === story.align));
+            storyCanvas.classList.toggle('sticker', story.mode === 'sticker');
+        }
+
+        async function renderStory() {
+            await storyFonts;
+            const ctx = storyCanvas.getContext('2d');
+            const W = STORY_W, H = STORY_H;
+            ctx.clearRect(0, 0, W, H);
+
+            if (story.mode === 'photo' && story.photo) {
+                const img = story.photo;
+                const scale = Math.max(W / img.width, H / img.height);
+                const w = img.width * scale, h = img.height * scale;
+                ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+            } else if (story.mode !== 'sticker') {
+                const bg = ctx.createLinearGradient(0, 0, 0, H);
+                bg.addColorStop(0, '#1A1C20');
+                bg.addColorStop(1, '#0A0B0D');
+                ctx.fillStyle = bg;
+                ctx.fillRect(0, 0, W, H);
+            }
+
+            const s = runStats(lastRun);
+            const rows = [
+                ['Distance', s.distance],
+                ['Pace', s.pace],
+                ['Time', s.time],
+                ['Area claimed', s.area],
+                ['Cal', s.cal],
+                ['Steps', s.steps]
+            ];
+            // Compact column like Strava's stats sticker, so the photo stays the hero
+            const cx = story.align === 'left' ? 200 : story.align === 'center' ? W / 2 : W - 200;
+            const top = H * 0.34;
+            const rowGap = 104;
+            const firstRow = top + 96;
+            const columnMid = firstRow + (rows.length * rowGap) / 2;
+
+            // Route crosses the middle of the stats column, like Strava's overlay
+            drawRoute(ctx, lastRun, { x: cx - 170, y: columnMid - 170, w: 340, h: 340 }, 9, 0.16);
+
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'alphabetic';
+            ctx.fillStyle = '#FFFFFF';
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+            ctx.shadowBlur = 14;
+
+            if (story.caption) {
+                ctx.font = 'italic 46px "Playfair Display", Georgia, serif';
+                ctx.fillText(story.caption, cx, top - 74, story.align === 'center' ? W - 80 : 400);
+            }
+
+            ctx.font = 'italic 900 58px Roboto, sans-serif';
+            if ('letterSpacing' in ctx) ctx.letterSpacing = '1px';
+            ctx.fillText('GEOQUEST', cx, top);
+            if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+
+            rows.forEach(([label, value], i) => {
+                const y = firstRow + i * rowGap;
+                ctx.font = '500 26px Roboto, sans-serif';
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
+                ctx.fillText(label, cx, y);
+                ctx.font = '700 48px Roboto, sans-serif';
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillText(value, cx, y + 52);
+            });
+            ctx.shadowBlur = 0;
+        }
+
+        async function storyFile() {
+            await renderStory();
+            const blob = await new Promise(resolve => storyCanvas.toBlob(resolve, 'image/png'));
+            const date = new Date(lastRun.startedAt).toISOString().slice(0, 10);
+            return new File([blob], `geoquest-run-${date}.png`, { type: 'image/png' });
+        }
+
+        function downloadFile(file) {
+            const url = URL.createObjectURL(file);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = file.name;
+            document.body.append(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        async function shareStory() {
+            const file = await storyFile();
+            if (navigator.canShare?.({ files: [file] })) {
+                try {
+                    await navigator.share({ files: [file] });
+                    return;
+                } catch (e) {
+                    if (e.name === 'AbortError') return;
+                }
+            }
+            downloadFile(file);
+            showToast('Image saved. Post it from your gallery.', 3000, 'success');
+        }
+
+        async function saveStory() {
+            downloadFile(await storyFile());
+            showToast('Image saved', 2000, 'success');
+        }
+
+        async function handleStoryPhoto(e) {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (!file) return;
+            try {
+                story.photo = await createImageBitmap(file);
+                story.mode = 'photo';
+                syncComposerControls();
+                renderStory();
+            } catch (_) {
+                showToast("Couldn't open that photo", 3000);
+            }
+        }
+
+        $('summary-close').addEventListener('click', closeRunSummary);
+        $('summary-done').addEventListener('click', closeRunSummary);
+        $('summary-share').addEventListener('click', openComposer);
+        $('share-last-btn').addEventListener('click', openRunSummary);
+        $('composer-back').addEventListener('click', () => { $('composer').hidden = true; });
+        $('story-share').addEventListener('click', shareStory);
+        $('story-save').addEventListener('click', saveStory);
+        $('story-photo').addEventListener('change', handleStoryPhoto);
+        $('story-caption').addEventListener('input', e => { story.caption = e.target.value.trim(); renderStory(); });
+        $('bg-mode').addEventListener('click', e => {
+            const mode = e.target.closest('button')?.dataset.mode;
+            if (!mode) return;
+            if (mode === 'photo' && (!story.photo || story.mode === 'photo')) {
+                $('story-photo').click();
+                return;
+            }
+            story.mode = mode;
+            syncComposerControls();
+            renderStory();
+        });
+        $('align-mode').addEventListener('click', e => {
+            const align = e.target.closest('button')?.dataset.align;
+            if (!align) return;
+            story.align = align;
+            syncComposerControls();
+            renderStory();
+        });
 
         // ─── Debug helpers ────────────────────────────────────────────────────
         function simulatePathCapture() {

@@ -6,6 +6,8 @@ A real-world GPS territory game. Walk a loop to capture the area inside it. Cros
 
 **Owning land:** claimed land is filled with your color. A loop that overlaps another player's land takes that part (it turns your color, and they lose the points for it). A loop that overlaps your own land merges with it. You score 1 point per 100 m² of new land, plus 10 for cutting someone's live trail.
 
+**Sharing a run:** when you stop a run you get a summary (distance, time, pace, area claimed, points, calories). Tap **Share to story** to make a Strava-style 1080×1920 story image: pick a photo (or a plain background, or a transparent sticker), add a caption, choose where the stats sit, then share it straight to Instagram or save it. Calories and steps are estimates from distance and pace. **Share last run** in the panel reopens it later.
+
 Keep the game open while you walk: the screen stays on automatically during a run, because phones pause GPS for locked or background browser tabs.
 
 One player hosts a room and shares the 4-letter code; everyone else joins with it. The Node server holds the room state and validates every capture and cut.
