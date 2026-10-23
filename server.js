@@ -9,7 +9,8 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 const MAX_NAME_LEN = 20;
 const MAX_PATH_POINTS = 2000;
 const MIN_TERRITORY_AREA_M2 = 100;
-const EMPTY_ROOM_GRACE_MS = 2 * 60 * 1000;
+// Long enough that every phone locking for a while doesn't wipe the game
+const EMPTY_ROOM_GRACE_MS = 60 * 60 * 1000;
 
 const app = express();
 const server = http.createServer(app);
@@ -143,11 +144,22 @@ function addPlayer(socket, room, name, playerId) {
         }
     }
 
+    // Returning after leaving or closing the tab: restore by name
+    if (color === null) {
+        const retired = room.retired.get(name);
+        if (retired) {
+            score = retired.score;
+            color = retired.color;
+            room.retired.delete(name);
+        }
+    }
+    const colorTaken = [...room.players.values()].some(p => p.color === color);
+
     const player = {
         socketId: socket.id,
         playerId,
         name,
-        color: color || pickColor(room, name),
+        color: color && !colorTaken ? color : pickColor(room, name),
         score,
         activePath: [],
         joinedAt: Date.now()
@@ -168,6 +180,7 @@ function leaveRoom(socket) {
     const { room, player } = ctx;
 
     room.players.delete(socket.id);
+    room.retired.set(player.name, { score: player.score, color: player.color });
     socket.leave(room.code);
 
     if (room.players.size === 0) {
@@ -212,6 +225,7 @@ io.on('connection', (socket) => {
             hostSocketId: socket.id,
             players: new Map(),
             territories: new Map(),
+            retired: new Map(), // name → { score, color } of players who left
             emptySince: null
         };
         rooms.set(room.code, room);

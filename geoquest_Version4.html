@@ -660,6 +660,8 @@
         // Keyless OSM tiles, restyled to a minimal dark/light look via the --tile-filter CSS token
         const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
         const MIN_TERRITORY_AREA_M2 = 100;
+        const CLOSE_RADIUS_M = 20;      // coming back this close to your trail closes the loop
+        const MIN_LOOP_LENGTH_M = 60;   // ...but only to a part of the trail at least this far back
         const JITTER_THRESHOLD_M = 3;
         const MAX_ACCURACY_M = 50;
         const PATH_SYNC_INTERVAL_MS = 1000;
@@ -672,6 +674,10 @@
         let accuracyCircle = null;
         let currentPathPolyline = null;
         let currentPathGlow = null;
+        let startMarker = null;
+        let closingLine = null;
+        let loopPreview = null;
+        let wakeLock = null;
         let lastFix = null;
         let followMe = true;
 
@@ -791,6 +797,18 @@
                 savePlayerName();
             }
             playerNameInput.value = playerName;
+        }
+
+        // Per tab, so a reload rejoins the room but a fresh tab starts at the lobby
+        function savedRoomCode() {
+            try { return sessionStorage.getItem('geoquest_room'); } catch (_) { return null; }
+        }
+
+        function saveRoomCode(code) {
+            try {
+                if (code) sessionStorage.setItem('geoquest_room', code);
+                else sessionStorage.removeItem('geoquest_room');
+            } catch (_) { /* storage unavailable */ }
         }
 
         function savePlayerName() {
@@ -932,6 +950,35 @@
             if (currentPathGlow) map.removeLayer(currentPathGlow);
             currentPathPolyline = null;
             currentPathGlow = null;
+            clearLoopGuide();
+        }
+
+        // Start ring, dashed line back to it, and a faint preview of the area the loop would claim
+        function updateLoopGuide() {
+            if (!isTracking || pathCoordinates.length < 2) {
+                clearLoopGuide();
+                return;
+            }
+            const c = myColor();
+            const start = pathCoordinates[0];
+            const here = pathCoordinates[pathCoordinates.length - 1];
+
+            if (!startMarker) {
+                loopPreview = L.polygon(pathCoordinates, { stroke: false, fillColor: c, fillOpacity: 0.08, interactive: false }).addTo(map);
+                closingLine = L.polyline([here, start], { color: c, weight: 2, opacity: 0.6, dashArray: '4 8', lineCap: 'round', interactive: false }).addTo(map);
+                startMarker = L.circleMarker(start, { radius: 7, color: c, weight: 3, fillColor: c, fillOpacity: 0.25, interactive: false }).addTo(map);
+            } else {
+                loopPreview.setLatLngs(pathCoordinates);
+                closingLine.setLatLngs([here, start]);
+                startMarker.setLatLng(start);
+            }
+        }
+
+        function clearLoopGuide() {
+            for (const layer of [startMarker, closingLine, loopPreview]) {
+                if (layer) map.removeLayer(layer);
+            }
+            startMarker = closingLine = loopPreview = null;
         }
 
         // ─── Other players ────────────────────────────────────────────────────
@@ -1021,9 +1068,10 @@
 
             socket.on('connect', () => {
                 setConnectionStatus(true);
-                // After a network drop, reclaim our seat in the room
-                if (roomCode) {
-                    socket.emit('room:join', { code: roomCode, playerName, playerId });
+                // After a network drop or a page reload, reclaim our seat in the room
+                const code = roomCode || savedRoomCode();
+                if (code) {
+                    socket.emit('room:join', { code, playerName, playerId });
                 }
             });
             socket.on('disconnect', () => {
@@ -1046,10 +1094,11 @@
 
         // ── Room events ───────────────────────────────────────────────────────
         function handleRoomJoined({ code, roomState, isHost: amHost }) {
-            const isRejoin = roomCode === code;
+            const isRejoin = roomCode === code || savedRoomCode() === code;
             clearRoomFromMap();
 
             roomCode = code;
+            saveRoomCode(code);
             isHost = amHost;
             hostName = roomState.hostName;
 
@@ -1080,8 +1129,8 @@
         }
 
         function handleRoomNotFound({ code }) {
-            if (roomCode) {
-                const closed = roomCode;
+            const closed = roomCode || savedRoomCode();
+            if (closed) {
                 resetSession();
                 showAlert('Room closed', `Room ${closed} no longer exists. Host or join a new game.`);
             } else {
@@ -1201,6 +1250,7 @@
             pathCoordinates = [];
             clearOwnPath();
             roomCode = null;
+            saveRoomCode(null);
             isHost = false;
             hostName = null;
             score = 0;
@@ -1273,6 +1323,7 @@
             clearOwnPath();
             document.body.classList.remove('can-lore');
             setRunStatus('waiting', 'Finding GPS signal…');
+            keepScreenOn(true);
 
             watchId = navigator.geolocation.watchPosition(
                 onLocationSuccess,
@@ -1282,6 +1333,7 @@
         }
 
         function stopWatchingPosition() {
+            keepScreenOn(false);
             if (watchId !== null) {
                 navigator.geolocation.clearWatch(watchId);
                 watchId = null;
@@ -1314,7 +1366,7 @@
                 setRunStatus('waiting', 'Weak GPS signal · move into the open');
                 return;
             }
-            setRunStatus('tracking', 'Tracking · close a loop to claim it');
+            updateRunHint();
 
             const newCoord = { lat: coords.latitude, lng: coords.longitude };
 
@@ -1342,8 +1394,38 @@
             updatePathStat();
 
             checkForInterception();
-            checkForTerritoryCapture(pathCoordinates);
+            if (!checkForTerritoryCapture(pathCoordinates)) checkForLoopClosure(pathCoordinates);
+            updateLoopGuide();
+            updateRunHint();
         }
+
+        function updateRunHint() {
+            if (pathCoordinates.length < 2 || trailLengthMeters() < MIN_LOOP_LENGTH_M) {
+                setRunStatus('tracking', 'Tracking · walk a loop and come back to your start');
+                return;
+            }
+            const start = pathCoordinates[0];
+            const here = pathCoordinates[pathCoordinates.length - 1];
+            const meters = turf.distance(turf.point([here.lng, here.lat]), turf.point([start.lng, start.lat]), { units: 'meters' });
+            setRunStatus('tracking', `Head back to your start to claim · ${Math.round(meters)} m`);
+        }
+
+        async function keepScreenOn(on) {
+            try {
+                if (on && !wakeLock && 'wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    wakeLock.addEventListener('release', () => { wakeLock = null; });
+                } else if (!on && wakeLock) {
+                    await wakeLock.release();
+                    wakeLock = null;
+                }
+            } catch (_) { /* not supported, or denied by battery saver */ }
+        }
+
+        // The browser drops the wake lock whenever the page is hidden
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && isTracking) keepScreenOn(true);
+        });
 
         function onLocationError(error) {
             // Brief GPS dropouts (tunnels, tall buildings) are normal; only give up if permission is denied
@@ -1381,8 +1463,57 @@
         }
 
         // ─── Territory capture ────────────────────────────────────────────────
+        // Asks the server to claim the loop `ring` ([lng,lat] points, open); the new trail starts at `restartPoint`
+        function tryClaim(ring, restartPoint) {
+            if (ring.length < 3) return false;
+            const pts = [...ring];
+            if (turf.booleanClockwise([...pts, pts[0]])) pts.reverse();
+            const closedRing = [...pts, pts[0]];
+
+            let area;
+            try {
+                area = turf.area(turf.polygon([closedRing]));
+            } catch (_) {
+                return false;
+            }
+            if (area < MIN_TERRITORY_AREA_M2) return false;
+
+            // Server validates, scores and broadcasts territory:captured to everyone
+            socket.emit('territory:claim', {
+                id: `territory_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
+                coords: closedRing.map(([lng, lat]) => [lat, lng]),
+                area
+            });
+
+            pathCoordinates = [restartPoint];
+            drawOwnPath();
+            updatePathStat();
+            return true;
+        }
+
+        // GPS rarely lands exactly on your old trail, so returning near it also closes the loop
+        function checkForLoopClosure(path) {
+            const n = path.length - 1;
+            if (n < 3) return false;
+
+            const toPoint = p => turf.point([p.lng, p.lat]);
+            const alongToEnd = new Array(n + 1);
+            alongToEnd[n] = 0;
+            for (let k = n - 1; k >= 0; k--) {
+                alongToEnd[k] = alongToEnd[k + 1] + turf.distance(toPoint(path[k]), toPoint(path[k + 1]), { units: 'meters' });
+            }
+
+            const here = toPoint(path[n]);
+            for (let j = 0; j < n && alongToEnd[j] >= MIN_LOOP_LENGTH_M; j++) {
+                if (turf.distance(here, toPoint(path[j]), { units: 'meters' }) > CLOSE_RADIUS_M) continue;
+                const ring = path.slice(j, n + 1).map(p => [p.lng, p.lat]);
+                if (tryClaim(ring, path[n])) return true;
+            }
+            return false;
+        }
+
         function checkForTerritoryCapture(currentPath) {
-            if (currentPath.length < 4) return;
+            if (currentPath.length < 4) return false;
 
             const latest = [currentPath[currentPath.length - 1].lng, currentPath[currentPath.length - 1].lat];
             const prev   = [currentPath[currentPath.length - 2].lng, currentPath[currentPath.length - 2].lat];
@@ -1403,29 +1534,9 @@
                     intersectionPoint,
                     ...currentPath.slice(i + 1, currentPath.length - 1).map(p => [p.lng, p.lat])
                 ];
-                if (turf.booleanClockwise([...ring, ring[0]])) ring.reverse();
-                const closedRing = [...ring, ring[0]];
-
-                let area;
-                try {
-                    area = turf.area(turf.polygon([closedRing]));
-                } catch (_) {
-                    continue;
-                }
-                if (area < MIN_TERRITORY_AREA_M2) continue;
-
-                // Server validates, scores and broadcasts territory:captured to everyone
-                socket.emit('territory:claim', {
-                    id: `territory_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
-                    coords: closedRing.map(([lng, lat]) => [lat, lng]),
-                    area
-                });
-
-                pathCoordinates = [{ lat: intersectionPoint[1], lng: intersectionPoint[0] }];
-                drawOwnPath();
-                updatePathStat();
-                return;
+                if (tryClaim(ring, { lat: intersectionPoint[1], lng: intersectionPoint[0] })) return true;
             }
+            return false;
         }
 
         // ─── Gemini lore ──────────────────────────────────────────────────────
@@ -1485,10 +1596,14 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
             updatePathStat();
         }
 
-        function updatePathStat() {
-            const meters = pathCoordinates.length > 1
+        function trailLengthMeters() {
+            return pathCoordinates.length > 1
                 ? turf.length(turf.lineString(pathCoordinates.map(p => [p.lng, p.lat])), { units: 'meters' })
                 : 0;
+        }
+
+        function updatePathStat() {
+            const meters = trailLengthMeters();
             statPath.innerHTML = meters < 1000
                 ? `${Math.round(meters)}<small>m</small>`
                 : `${(meters / 1000).toFixed(1)}<small>km</small>`;
