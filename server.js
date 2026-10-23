@@ -4,48 +4,81 @@ const { Server } = require('socket.io');
 const turf = require('@turf/turf');
 const path = require('path');
 
+const PORT = process.env.PORT || 3000;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MAX_NAME_LEN = 20;
+const MAX_PATH_POINTS = 2000;
+const MIN_TERRITORY_AREA_M2 = 100;
+const EMPTY_ROOM_GRACE_MS = 2 * 60 * 1000;
+
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: '*' }
-});
+const io = new Server(server);
 
-app.use(express.json());
-app.use(express.static(__dirname));
+app.use(express.json({ limit: '100kb' }));
 
-// Serve the game at root
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'geoquest_Version4.html'));
-});
+const GAME_FILE = path.join(__dirname, 'geoquest_Version4.html');
+app.get(['/', '/geoquest_Version4.html'], (req, res) => res.sendFile(GAME_FILE));
 
-// Gemini lore proxy — keeps the API key server-side
+// Gemini lore proxy keeps the API key server-side
 app.post('/api/generate-lore', async (req, res) => {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-        return res.status(503).json({ error: 'Lore generation not configured on server' });
+        return res.status(503).json({ error: 'Lore generation not configured on server (set GEMINI_API_KEY)' });
     }
+    const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.slice(0, 4000) : '';
+    if (!prompt) return res.status(400).json({ error: 'Missing prompt' });
 
-    const { prompt, center, area, player } = req.body;
     try {
         const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
             {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
                 body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
             }
         );
         const data = await response.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!text) throw new Error('No content from Gemini');
+        if (!text) throw new Error(data.error?.message || 'No content from Gemini');
         res.json({ text });
     } catch (err) {
         console.error('Gemini API error:', err.message);
-        res.status(500).json({ error: 'Failed to generate lore' });
+        res.status(502).json({ error: 'Failed to generate lore' });
     }
 });
 
-// ─── In-memory room store ────────────────────────────────────────────────────
+// ─── Input sanitizing ─────────────────────────────────────────────────────────
+
+function cleanName(name) {
+    if (typeof name !== 'string') return null;
+    const trimmed = name.trim().slice(0, MAX_NAME_LEN);
+    return trimmed || null;
+}
+
+function cleanId(id) {
+    return typeof id === 'string' && id.length > 0 && id.length <= 64 ? id : null;
+}
+
+const isLat = v => Number.isFinite(v) && v >= -90 && v <= 90;
+const isLng = v => Number.isFinite(v) && v >= -180 && v <= 180;
+
+function cleanPath(p) {
+    if (!Array.isArray(p)) return [];
+    return p.slice(-MAX_PATH_POINTS)
+        .filter(pt => pt && isLat(pt.lat) && isLng(pt.lng))
+        .map(pt => ({ lat: pt.lat, lng: pt.lng }));
+}
+
+function cleanLatLngRing(coords) {
+    if (!Array.isArray(coords) || coords.length < 4 || coords.length > MAX_PATH_POINTS) return null;
+    for (const c of coords) {
+        if (!Array.isArray(c) || !isLat(c[0]) || !isLng(c[1])) return null;
+    }
+    return coords.map(([lat, lng]) => [lat, lng]);
+}
+
+// ─── Rooms ────────────────────────────────────────────────────────────────────
 
 const rooms = new Map();
 
@@ -63,344 +96,300 @@ function playerColor(name) {
     for (let i = 0; i < name.length; i++) {
         hash = name.charCodeAt(i) + ((hash << 5) - hash);
     }
-    const hue = Math.abs(hash) % 360;
-    return `hsl(${hue}, 70%, 45%)`;
+    return `hsl(${Math.abs(hash) % 360}, 70%, 45%)`;
+}
+
+function hostName(room) {
+    return room.players.get(room.hostSocketId)?.name || null;
 }
 
 function roomSnapshot(room) {
     return {
-        players: [...room.players.values()].map(p => ({
-            name: p.name,
-            color: p.color,
-            score: p.score
-        })),
-        territories: [...room.territories.values()]
+        hostName: hostName(room),
+        players: [...room.players.values()].map(p => ({ name: p.name, color: p.color, score: p.score })),
+        territories: [...room.territories.values()],
+        activePaths: [...room.players.values()]
+            .filter(p => p.activePath.length > 1)
+            .map(p => ({ playerName: p.name, path: p.activePath }))
     };
 }
 
-// ─── Socket.IO event handling ─────────────────────────────────────────────────
+function getContext(socket) {
+    const room = rooms.get(socket.data.roomCode);
+    const player = room?.players.get(socket.id);
+    return player ? { room, player } : null;
+}
+
+function addPlayer(socket, room, name, playerId) {
+    // Same browser tab reconnecting: carry over its score and drop the stale socket
+    let score = 0;
+    for (const [sid, p] of room.players) {
+        if (playerId && p.playerId === playerId) {
+            score = p.score;
+            room.players.delete(sid);
+            if (room.hostSocketId === sid) room.hostSocketId = socket.id;
+            io.sockets.sockets.get(sid)?.disconnect(true);
+        }
+    }
+
+    const player = {
+        socketId: socket.id,
+        playerId,
+        name,
+        color: playerColor(name),
+        score,
+        activePath: [],
+        joinedAt: Date.now()
+    };
+    room.players.set(socket.id, player);
+    room.emptySince = null;
+    if (!room.players.has(room.hostSocketId)) room.hostSocketId = socket.id;
+
+    socket.data.roomCode = room.code;
+    socket.join(room.code);
+    return player;
+}
+
+function leaveRoom(socket) {
+    const ctx = getContext(socket);
+    socket.data.roomCode = null;
+    if (!ctx) return;
+    const { room, player } = ctx;
+
+    room.players.delete(socket.id);
+    socket.leave(room.code);
+
+    if (room.players.size === 0) {
+        room.emptySince = Date.now();
+        console.log(`[${room.code}] Empty, kept for rejoin`);
+        return;
+    }
+
+    let newHostName = null;
+    if (socket.id === room.hostSocketId) {
+        const nextHost = [...room.players.values()].sort((a, b) => a.joinedAt - b.joinedAt)[0];
+        room.hostSocketId = nextHost.socketId;
+        newHostName = nextHost.name;
+        io.to(room.code).emit('room:host_changed', { newHostName });
+        console.log(`[${room.code}] Host changed to ${newHostName}`);
+    }
+
+    io.to(room.code).emit('path:deleted', { playerName: player.name });
+    io.to(room.code).emit('room:player_left', { playerName: player.name, newHostName });
+    console.log(`[${room.code}] ${player.name} left (${room.players.size} remaining)`);
+}
+
+// ─── Socket.IO ────────────────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
-
-    // ── Create a new room (player becomes host) ──────────────────────────────
-    socket.on('room:create', ({ playerName }) => {
-        if (!playerName || typeof playerName !== 'string') return;
-
-        const code = generateRoomCode();
-        const player = {
-            socketId: socket.id,
-            name: playerName,
-            color: playerColor(playerName),
-            score: 0,
-            activePath: [],
-            joinedAt: Date.now()
-        };
-
-        const room = {
-            code,
-            hostSocketId: socket.id,
-            players: new Map([[socket.id, player]]),
-            territories: new Map()
-        };
-
-        rooms.set(code, room);
-        socket.data.roomCode = code;
-        socket.data.playerName = playerName;
-        socket.join(code);
-
-        socket.emit('room:joined', {
-            code,
-            roomState: roomSnapshot(room),
-            isHost: true
-        });
-
-        console.log(`[${code}] Created by ${playerName}`);
+    // A bad payload from one client must never take the server down for everyone
+    const on = (event, handler) => socket.on(event, (payload) => {
+        try {
+            handler(payload && typeof payload === 'object' ? payload : {});
+        } catch (err) {
+            console.error(`Error handling ${event}:`, err);
+        }
     });
 
-    // ── Join an existing room ─────────────────────────────────────────────────
-    socket.on('room:join', ({ code, playerName }) => {
-        if (!code || !playerName) return;
+    on('room:create', ({ playerName, playerId }) => {
+        const name = cleanName(playerName);
+        if (!name) return socket.emit('error', { message: 'Please enter a name.' });
 
-        const room = rooms.get(code.toUpperCase());
-        if (!room) {
-            socket.emit('error', { message: `Room "${code}" not found.` });
-            return;
-        }
-
-        // Reject duplicate names in same room
-        const nameTaken = [...room.players.values()].some(p => p.name === playerName);
-        if (nameTaken) {
-            socket.emit('error', { message: `Name "${playerName}" is already taken in this room.` });
-            return;
-        }
-
-        const player = {
-            socketId: socket.id,
-            name: playerName,
-            color: playerColor(playerName),
-            score: 0,
-            activePath: [],
-            joinedAt: Date.now()
+        leaveRoom(socket);
+        const room = {
+            code: generateRoomCode(),
+            hostSocketId: socket.id,
+            players: new Map(),
+            territories: new Map(),
+            emptySince: null
         };
+        rooms.set(room.code, room);
+        addPlayer(socket, room, name, cleanId(playerId));
 
-        room.players.set(socket.id, player);
-        socket.data.roomCode = code.toUpperCase();
-        socket.data.playerName = playerName;
-        socket.join(code.toUpperCase());
+        socket.emit('room:joined', { code: room.code, roomState: roomSnapshot(room), isHost: true });
+        console.log(`[${room.code}] Created by ${name}`);
+    });
 
-        // Tell the joiner the full room state
+    on('room:join', ({ code, playerName, playerId }) => {
+        const name = cleanName(playerName);
+        if (!name) return socket.emit('error', { message: 'Please enter a name.' });
+        if (typeof code !== 'string') return socket.emit('error', { message: 'Invalid room code.' });
+
+        const room = rooms.get(code.trim().toUpperCase());
+        if (!room) return socket.emit('room:not_found', { code });
+
+        const id = cleanId(playerId);
+        const nameTaken = [...room.players.values()].some(p => p.name === name && !(id && p.playerId === id));
+        if (nameTaken) {
+            return socket.emit('error', { message: `Name "${name}" is already taken in this room.` });
+        }
+
+        if (socket.data.roomCode !== room.code) leaveRoom(socket);
+        const player = addPlayer(socket, room, name, id);
+
         socket.emit('room:joined', {
             code: room.code,
             roomState: roomSnapshot(room),
-            isHost: false
+            isHost: room.hostSocketId === socket.id
         });
-
-        // Tell everyone else
         socket.to(room.code).emit('room:player_joined', {
-            player: { name: playerName, color: player.color }
+            player: { name: player.name, color: player.color, score: player.score }
         });
-
-        console.log(`[${room.code}] ${playerName} joined (${room.players.size} players)`);
+        console.log(`[${room.code}] ${name} joined (${room.players.size} players)`);
     });
 
-    // ── Sync active path ──────────────────────────────────────────────────────
-    socket.on('path:update', ({ path }) => {
-        const room = rooms.get(socket.data.roomCode);
-        if (!room) return;
+    on('room:leave', () => leaveRoom(socket));
 
-        const player = room.players.get(socket.id);
-        if (!player) return;
-
-        player.activePath = Array.isArray(path) ? path : [];
-
-        // Broadcast to everyone else in the room
-        socket.to(room.code).emit('path:updated', {
-            playerName: player.name,
-            path: player.activePath
+    on('path:update', ({ path: p }) => {
+        const ctx = getContext(socket);
+        if (!ctx) return;
+        ctx.player.activePath = cleanPath(p);
+        socket.to(ctx.room.code).emit('path:updated', {
+            playerName: ctx.player.name,
+            path: ctx.player.activePath
         });
     });
 
-    // ── Delete active path ────────────────────────────────────────────────────
-    socket.on('path:delete', () => {
-        const room = rooms.get(socket.data.roomCode);
-        if (!room) return;
-
-        const player = room.players.get(socket.id);
-        if (!player) return;
-
-        player.activePath = [];
-
-        socket.to(room.code).emit('path:deleted', { playerName: player.name });
+    on('path:delete', () => {
+        const ctx = getContext(socket);
+        if (!ctx) return;
+        ctx.player.activePath = [];
+        socket.to(ctx.room.code).emit('path:deleted', { playerName: ctx.player.name });
     });
 
-    // ── Claim a territory ─────────────────────────────────────────────────────
-    socket.on('territory:claim', ({ id, coords, center, area }) => {
-        const room = rooms.get(socket.data.roomCode);
-        if (!room) return;
+    on('territory:claim', ({ id, coords, center, area }) => {
+        const ctx = getContext(socket);
+        if (!ctx) return;
+        const { room, player } = ctx;
 
-        const player = room.players.get(socket.id);
-        if (!player) return;
+        const territoryId = cleanId(id);
+        const ring = cleanLatLngRing(coords);
+        if (!territoryId || !ring || room.territories.has(territoryId)) {
+            return socket.emit('territory:claim_rejected', { id, reason: 'Invalid territory' });
+        }
 
-        // Server-side validation with Turf.js
-        const validation = validateTerritory(room, coords, area);
+        const validation = validateTerritory(room, ring, Number(area));
         if (!validation.valid) {
-            socket.emit('territory:claim_rejected', { reason: validation.reason });
-            return;
+            return socket.emit('territory:claim_rejected', { id: territoryId, reason: validation.reason });
         }
 
         const territory = {
-            id,
-            coords,
-            center,
+            id: territoryId,
+            coords: ring,
+            center: validation.center,
             area: validation.serverArea,
             owner: player.name,
             timestamp: new Date().toISOString(),
             lore: null
         };
+        room.territories.set(territoryId, territory);
 
-        room.territories.set(id, territory);
-
-        // Award points
         const points = Math.max(1, Math.round(validation.serverArea / 100));
         player.score += points;
 
-        // Clear their active path
         player.activePath = [];
         socket.to(room.code).emit('path:deleted', { playerName: player.name });
 
-        // Broadcast the confirmed territory to everyone in the room
         io.to(room.code).emit('territory:captured', {
             territory,
             captorName: player.name,
-            points
+            points,
+            captorScore: player.score
         });
-
-        console.log(`[${room.code}] ${player.name} captured territory ${id} (${Math.round(validation.serverArea)}m², +${points}pts)`);
+        console.log(`[${room.code}] ${player.name} captured ${territoryId} (${Math.round(validation.serverArea)}m², +${points})`);
     });
 
-    // ── Path interception ─────────────────────────────────────────────────────
-    socket.on('path:intercept', ({ targetPlayer }) => {
-        const room = rooms.get(socket.data.roomCode);
-        if (!room) return;
+    on('path:intercept', ({ targetPlayer, path: p }) => {
+        const ctx = getContext(socket);
+        if (!ctx) return;
+        const { room, player: interceptor } = ctx;
 
-        const interceptor = room.players.get(socket.id);
-        if (!interceptor || interceptor.activePath.length < 2) return;
+        // Use the interceptor's latest path; the periodic sync can lag by a second
+        const latest = cleanPath(p);
+        if (latest.length > 1) interceptor.activePath = latest;
+        if (interceptor.activePath.length < 2) return;
 
-        // Find the target player
-        const victim = [...room.players.values()].find(p => p.name === targetPlayer);
-        if (!victim || victim.activePath.length < 2) return;
+        const victim = [...room.players.values()].find(pl => pl.name === targetPlayer);
+        if (!victim || victim === interceptor || victim.activePath.length < 2) return;
 
-        // Re-validate the intersection server-side
-        try {
-            const interceptorLine = turf.lineString(interceptor.activePath.map(p => [p.lng, p.lat]));
-            const victimLine = turf.lineString(victim.activePath.map(p => [p.lng, p.lat]));
-            const intersection = turf.lineIntersect(interceptorLine, victimLine);
+        const interceptorLine = turf.lineString(interceptor.activePath.map(pt => [pt.lng, pt.lat]));
+        const victimLine = turf.lineString(victim.activePath.map(pt => [pt.lng, pt.lat]));
+        if (turf.lineIntersect(interceptorLine, victimLine).features.length === 0) return;
 
-            if (intersection.features.length === 0) {
-                // False positive from client — no actual intersection
-                return;
-            }
-        } catch (e) {
-            return;
-        }
-
-        // Wipe the victim's path
         victim.activePath = [];
-
-        // Intercept bonus for the interceptor
         interceptor.score += 10;
 
-        // Find the victim's socket to notify them directly
-        const victimSocketEntry = [...room.players.entries()].find(([, p]) => p.name === targetPlayer);
-        const victimSocketId = victimSocketEntry ? victimSocketEntry[0] : null;
-
-        // Notify both players
+        io.to(room.code).emit('path:deleted', { playerName: victim.name });
         io.to(room.code).emit('path:intercepted', {
             interceptorName: interceptor.name,
-            victimName: targetPlayer
+            victimName: victim.name,
+            interceptorScore: interceptor.score
         });
-
-        if (victimSocketId) {
-            // Make sure victim's path is cleared on their side too
-            io.to(victimSocketId).emit('path:deleted', { playerName: targetPlayer });
-        }
-
-        console.log(`[${room.code}] ${interceptor.name} intercepted ${targetPlayer}`);
+        console.log(`[${room.code}] ${interceptor.name} intercepted ${victim.name}`);
     });
 
-    // ── Disconnect / leave ────────────────────────────────────────────────────
     socket.on('disconnect', () => {
-        const roomCode = socket.data.roomCode;
-        const room = rooms.get(roomCode);
-        if (!room) return;
-
-        const player = room.players.get(socket.id);
-        if (!player) return;
-
-        const leavingName = player.name;
-        room.players.delete(socket.id);
-
-        if (room.players.size === 0) {
-            rooms.delete(roomCode);
-            console.log(`[${roomCode}] Empty room deleted`);
-            return;
+        try {
+            leaveRoom(socket);
+        } catch (err) {
+            console.error('Error handling disconnect:', err);
         }
-
-        let newHostName = null;
-
-        // Elect new host if the leaving player was the host
-        if (socket.id === room.hostSocketId) {
-            const nextHost = [...room.players.values()].sort((a, b) => a.joinedAt - b.joinedAt)[0];
-            room.hostSocketId = nextHost.socketId;
-            newHostName = nextHost.name;
-            io.to(roomCode).emit('room:host_changed', { newHostName });
-            console.log(`[${roomCode}] Host changed to ${newHostName}`);
-        }
-
-        io.to(roomCode).emit('room:player_left', {
-            playerName: leavingName,
-            newHostName
-        });
-
-        // Clean up their path from other clients' views
-        io.to(roomCode).emit('path:deleted', { playerName: leavingName });
-
-        console.log(`[${roomCode}] ${leavingName} left (${room.players.size} remaining)`);
     });
 });
 
 // ─── Territory validation ─────────────────────────────────────────────────────
 
-function validateTerritory(room, coords, clientArea) {
-    try {
-        // coords are [lat, lng] pairs (Leaflet format) — convert to GeoJSON [lng, lat]
-        const ring = coords.map(([lat, lng]) => [lng, lat]);
-
-        // Close the ring if not already closed
-        const first = ring[0];
-        const last = ring[ring.length - 1];
-        if (first[0] !== last[0] || first[1] !== last[1]) {
-            ring.push(first);
-        }
-
-        if (ring.length < 4) {
-            return { valid: false, reason: 'Not enough points' };
-        }
-
-        const polygon = turf.polygon([ring]);
-        const serverArea = turf.area(polygon);
-
-        if (serverArea < 100) {
-            return { valid: false, reason: 'Territory too small (min 100m²)' };
-        }
-
-        if (Math.abs(serverArea - clientArea) > clientArea * 0.2) {
-            return { valid: false, reason: 'Area mismatch — possible tamper' };
-        }
-
-        // Check overlap with existing territories
-        for (const existing of room.territories.values()) {
-            try {
-                const existingRing = existing.coords.map(([lat, lng]) => [lng, lat]);
-                const existingFirst = existingRing[0];
-                const existingLast = existingRing[existingRing.length - 1];
-                if (existingFirst[0] !== existingLast[0] || existingFirst[1] !== existingLast[1]) {
-                    existingRing.push(existingFirst);
-                }
-                const existingPoly = turf.polygon([existingRing]);
-                const overlap = turf.intersect(polygon, existingPoly);
-                if (overlap) {
-                    const overlapArea = turf.area(overlap);
-                    if (overlapArea > serverArea * 0.5) {
-                        return { valid: false, reason: 'Overlaps an existing territory' };
-                    }
-                }
-            } catch (_) {
-                // Skip malformed existing territory
-            }
-        }
-
-        return { valid: true, serverArea };
-    } catch (err) {
-        return { valid: false, reason: 'Invalid polygon geometry' };
-    }
+function toGeoJsonPolygon(latLngRing) {
+    const ring = latLngRing.map(([lat, lng]) => [lng, lat]);
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) ring.push(first);
+    return turf.polygon([ring]);
 }
 
-// ─── Periodic room cleanup (rooms older than 2h with 0 players) ───────────────
+function validateTerritory(room, latLngRing, clientArea) {
+    let polygon;
+    try {
+        polygon = toGeoJsonPolygon(latLngRing);
+    } catch (_) {
+        return { valid: false, reason: 'Invalid polygon geometry' };
+    }
 
-setInterval(() => {
-    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
-    for (const [code, room] of rooms.entries()) {
-        if (room.players.size === 0 || (room.createdAt && room.createdAt < twoHoursAgo)) {
-            rooms.delete(code);
+    const serverArea = turf.area(polygon);
+    if (serverArea < MIN_TERRITORY_AREA_M2) {
+        return { valid: false, reason: `Territory too small (min ${MIN_TERRITORY_AREA_M2}m²)` };
+    }
+    if (!Number.isFinite(clientArea) || Math.abs(serverArea - clientArea) > serverArea * 0.2) {
+        return { valid: false, reason: 'Area mismatch' };
+    }
+
+    for (const existing of room.territories.values()) {
+        try {
+            const overlap = turf.intersect(polygon, toGeoJsonPolygon(existing.coords));
+            if (overlap && turf.area(overlap) > serverArea * 0.5) {
+                return { valid: false, reason: 'Overlaps an existing territory' };
+            }
+        } catch (_) {
+            // Self-intersecting shapes can make intersect throw; skip that comparison
         }
     }
-}, 10 * 60 * 1000);
 
-// ─── Start server ─────────────────────────────────────────────────────────────
+    const [lng, lat] = turf.centerOfMass(polygon).geometry.coordinates;
+    return { valid: true, serverArea, center: [lat, lng] };
+}
 
-const PORT = process.env.PORT || 3000;
+// ─── Room cleanup ─────────────────────────────────────────────────────────────
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [code, room] of rooms) {
+        if (room.players.size === 0 && room.emptySince && now - room.emptySince > EMPTY_ROOM_GRACE_MS) {
+            rooms.delete(code);
+            console.log(`[${code}] Room closed`);
+        }
+    }
+}, 30 * 1000);
+
 server.listen(PORT, () => {
     console.log(`GeoQuest server running on http://localhost:${PORT}`);
-    console.log(`Open geoquest_Version4.html in your browser via the server URL above.`);
 });

@@ -10,9 +10,9 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
-    <script src='https://unpkg.com/@turf/turf@6/turf.min.js'></script>
+    <script src='https://unpkg.com/@turf/turf@6.5.0/turf.min.js'></script>
 
-    <!-- Socket.IO client — loaded from the server -->
+    <!-- Served by server.js -->
     <script src="/socket.io/socket.io.js"></script>
 
     <style>
@@ -57,6 +57,8 @@
             z-index: 2000;
             opacity: 0;
             transition: opacity 0.3s;
+            max-width: calc(100vw - 32px);
+            text-align: center;
         }
         .toast.show { opacity: 1; }
         .toast.success { background-color: #10b981; }
@@ -79,13 +81,12 @@
 
         <!-- Player name -->
         <div class="mb-3">
-            <input type="text" id="player-name" placeholder="Your name"
-                   class="w-full p-2 border rounded-lg text-center" />
+            <input type="text" id="player-name" placeholder="Your name" maxlength="20"
+                   class="w-full p-2 border rounded-lg text-center disabled:bg-gray-100 disabled:text-gray-500" />
         </div>
 
         <!-- Session panel -->
         <div id="session-panel" class="mb-3">
-            <!-- Pre-join -->
             <div id="pre-join-ui">
                 <button id="host-game-btn"
                         class="w-full bg-indigo-500 text-white font-bold py-2 px-4 rounded-full mb-2 hover:bg-indigo-600 transition-colors">
@@ -93,8 +94,8 @@
                 </button>
                 <div class="flex gap-2">
                     <input type="text" id="room-code-input" placeholder="Room code (e.g. AB3F)"
-                           class="flex-1 p-2 border rounded-lg text-center uppercase tracking-widest font-mono"
-                           maxlength="4" />
+                           class="flex-1 min-w-0 p-2 border rounded-lg text-center uppercase tracking-widest font-mono"
+                           maxlength="4" autocomplete="off" />
                     <button id="join-game-btn"
                             class="bg-amber-500 text-white font-bold py-2 px-4 rounded-full hover:bg-amber-600 transition-colors">
                         Join
@@ -102,7 +103,6 @@
                 </div>
             </div>
 
-            <!-- In-session (hidden until joined) -->
             <div id="in-session-ui" class="hidden">
                 <div class="flex justify-between items-center bg-gray-100 rounded-lg p-2">
                     <div class="flex items-center gap-2">
@@ -132,10 +132,6 @@
             <span id="lore-btn-text">✨ Generate Territory Lore</span>
             <div id="lore-btn-spinner" class="spinner hidden"></div>
         </button>
-
-        <div class="mt-3 flex justify-end">
-            <button id="reset-btn" class="text-sm text-red-500 hover:underline">Reset My Data</button>
-        </div>
     </div>
 
     <!-- Modal -->
@@ -153,7 +149,7 @@
     <!-- Debug Panel (toggle with 'd') -->
     <div id="debug-panel" class="hidden fixed bottom-4 left-4 p-4 bg-white/90 backdrop-blur-sm rounded-xl shadow-xl z-[1500] w-64">
         <h3 class="font-bold text-gray-800 mb-2">Debug Controls</h3>
-        <button id="simulate-btn" class="w-full bg-amber-500 text-white py-2 px-4 rounded mb-2">Simulate Path</button>
+        <button id="simulate-btn" class="w-full bg-amber-500 text-white py-2 px-4 rounded mb-2">Simulate Capture</button>
         <button id="intercept-btn" class="w-full bg-red-500 text-white py-2 px-4 rounded mb-2">Test Interception</button>
         <div class="text-xs text-gray-500 mt-2">Press 'd' to toggle debug panel</div>
     </div>
@@ -164,7 +160,9 @@
         const TERRITORY_COLOR = 'rgba(52, 152, 219, 0.3)';
         const MIN_TERRITORY_AREA_M2 = 100;
         const JITTER_THRESHOLD_M = 3;
+        const MAX_ACCURACY_M = 50;
         const PATH_SYNC_INTERVAL_MS = 1000;
+        const INTERCEPT_RETRY_MS = 2000;
 
         // ─── Map & tracking state ─────────────────────────────────────────────
         let map = null;
@@ -180,15 +178,18 @@
         let score = 0;
         let playerName = '';
 
-        // Other players' live paths
         let activePaths = new Map();      // name → [{lat,lng}]
         let activePathLayers = new Map(); // name → L.Polyline
+        let lastInterceptAttempt = new Map(); // name → timestamp
 
         // ─── Session state ────────────────────────────────────────────────────
         let socket = null;
         let roomCode = null;
         let isHost = false;
         let sessionPlayers = new Map(); // name → {color, score}
+
+        // Per-tab identity so a reconnecting tab reclaims its seat (and two tabs stay distinct)
+        const playerId = getOrCreatePlayerId();
 
         // ─── DOM refs ─────────────────────────────────────────────────────────
         const toggleBtn         = document.getElementById('toggle-tracking-btn');
@@ -204,7 +205,6 @@
         const playerNameInput   = document.getElementById('player-name');
         const connectionDot     = document.getElementById('connection-dot');
         const connectionLabel   = document.getElementById('connection-label');
-        const resetBtn          = document.getElementById('reset-btn');
         const debugPanel        = document.getElementById('debug-panel');
         const simulateBtn       = document.getElementById('simulate-btn');
         const interceptBtn      = document.getElementById('intercept-btn');
@@ -220,7 +220,7 @@
 
         // ─── Initialization ───────────────────────────────────────────────────
         document.addEventListener('DOMContentLoaded', () => {
-            loadFromLocalStorage();
+            loadPlayerName();
             initializeMap();
             initSocket();
 
@@ -228,15 +228,18 @@
             generateLoreBtn.addEventListener('click', handleGenerateLore);
             modalCloseBtn.addEventListener('click', () => modal.classList.add('hidden'));
             playerNameInput.addEventListener('change', handlePlayerNameChange);
-            resetBtn.addEventListener('click', handleReset);
             hostGameBtn.addEventListener('click', handleHostGame);
             joinGameBtn.addEventListener('click', handleJoinGame);
             leaveSessionBtn.addEventListener('click', handleLeaveSession);
             roomCodeInput.addEventListener('input', () => {
                 roomCodeInput.value = roomCodeInput.value.toUpperCase();
             });
+            roomCodeInput.addEventListener('keydown', e => {
+                if (e.key === 'Enter') handleJoinGame();
+            });
 
             document.addEventListener('keydown', e => {
+                if (e.target.tagName === 'INPUT') return;
                 if (e.key === 'd') debugPanel.classList.toggle('hidden');
             });
             simulateBtn.addEventListener('click', simulatePathCapture);
@@ -245,29 +248,37 @@
             updateUI();
         });
 
-        // ─── Local storage ────────────────────────────────────────────────────
-        function loadFromLocalStorage() {
+        function getOrCreatePlayerId() {
             try {
-                const saved = localStorage.getItem('geoquest_data');
-                if (saved) {
-                    const data = JSON.parse(saved);
-                    score = data.score || 0;
-                    playerName = data.playerName || '';
+                let id = sessionStorage.getItem('geoquest_player_id');
+                if (!id) {
+                    id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+                    sessionStorage.setItem('geoquest_player_id', id);
                 }
+                return id;
             } catch (e) {
-                score = 0;
-                playerName = '';
-            }
-            playerNameInput.value = playerName || generateRandomName();
-            if (!playerName) {
-                playerName = playerNameInput.value;
-                saveToLocalStorage();
+                return Math.random().toString(36).slice(2) + Date.now().toString(36);
             }
         }
 
-        function saveToLocalStorage() {
+        // ─── Local storage (name only; scores and territories live on the server) ──
+        function loadPlayerName() {
             try {
-                localStorage.setItem('geoquest_data', JSON.stringify({ score, playerName }));
+                const saved = JSON.parse(localStorage.getItem('geoquest_data') || '{}');
+                playerName = saved.playerName || '';
+            } catch (e) {
+                playerName = '';
+            }
+            if (!playerName) {
+                playerName = generateRandomName();
+                savePlayerName();
+            }
+            playerNameInput.value = playerName;
+        }
+
+        function savePlayerName() {
+            try {
+                localStorage.setItem('geoquest_data', JSON.stringify({ playerName }));
             } catch (e) {
                 console.error('localStorage save failed:', e);
             }
@@ -282,9 +293,16 @@
         // ─── Map ──────────────────────────────────────────────────────────────
         function initializeMap() {
             map = L.map('map').setView([51.505, -0.09], 13);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
                 attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             }).addTo(map);
+
+            if (!window.isSecureContext) {
+                showAlert('HTTPS required',
+                    'Browsers only allow GPS on https:// pages (or localhost). Open this game through an https link to play on a phone.');
+                return;
+            }
 
             navigator.geolocation.getCurrentPosition(
                 ({ coords }) => map.setView([coords.latitude, coords.longitude], 16),
@@ -297,26 +315,36 @@
         function initSocket() {
             socket = io();
 
-            socket.on('connect', () => setConnectionStatus(true));
+            socket.on('connect', () => {
+                setConnectionStatus(true);
+                // After a network drop, reclaim our seat in the room
+                if (roomCode) {
+                    socket.emit('room:join', { code: roomCode, playerName, playerId });
+                }
+            });
             socket.on('disconnect', () => {
                 setConnectionStatus(false);
-                showToast('Disconnected from server. Reconnecting...', 5000);
+                if (roomCode) showToast('Connection lost. Reconnecting...', 4000);
             });
 
-            socket.on('room:joined',        handleRoomJoined);
-            socket.on('room:player_joined', handlePlayerJoined);
-            socket.on('room:player_left',   handlePlayerLeft);
-            socket.on('room:host_changed',  handleHostChanged);
-            socket.on('path:updated',       handleRemotePathUpdated);
-            socket.on('path:deleted',       handleRemotePathDeleted);
-            socket.on('territory:captured', handleRemoteTerritoryCapture);
-            socket.on('territory:claim_rejected', handleClaimRejected);
-            socket.on('path:intercepted',   handleRemoteInterception);
-            socket.on('error',              ({ message }) => showToast(message, 5000));
+            socket.on('room:joined',              handleRoomJoined);
+            socket.on('room:not_found',           handleRoomNotFound);
+            socket.on('room:player_joined',       handlePlayerJoined);
+            socket.on('room:player_left',         handlePlayerLeft);
+            socket.on('room:host_changed',        handleHostChanged);
+            socket.on('path:updated',             handleRemotePathUpdated);
+            socket.on('path:deleted',             handleRemotePathDeleted);
+            socket.on('territory:captured',       handleTerritoryCaptured);
+            socket.on('territory:claim_rejected', ({ reason }) => showToast(`Claim rejected: ${reason}`, 4000));
+            socket.on('path:intercepted',         handleRemoteInterception);
+            socket.on('error',                    ({ message }) => showToast(message, 5000));
         }
 
         // ── Room events ───────────────────────────────────────────────────────
         function handleRoomJoined({ code, roomState, isHost: amHost }) {
+            const isRejoin = roomCode === code;
+            clearRoomFromMap();
+
             roomCode = code;
             isHost = amHost;
 
@@ -324,28 +352,44 @@
             for (const p of roomState.players) {
                 sessionPlayers.set(p.name, { color: p.color, score: p.score });
             }
+            score = sessionPlayers.get(playerName)?.score || 0;
 
-            // Render all territories already in the room
-            for (const t of roomState.territories) {
-                renderTerritory(t);
+            for (const t of roomState.territories) renderTerritory(t);
+            for (const { playerName: name, path } of roomState.activePaths) {
+                if (name === playerName) continue;
+                activePaths.set(name, path);
+                updateActivePathOnMap(name, path);
             }
 
-            // Switch UI panels
             preJoinUI.classList.add('hidden');
             inSessionUI.classList.remove('hidden');
             roomCodeDisplay.textContent = code;
             hostBadge.classList.toggle('hidden', !amHost);
-
+            playerNameInput.disabled = true;
             toggleBtn.disabled = false;
+
             updatePlayerList();
             updateUI();
 
-            const role = amHost ? 'You are the host.' : 'You joined the session.';
-            showToast(`Room ${code} — ${role}`, 4000, 'success');
+            if (isRejoin) {
+                showToast('Reconnected', 2000, 'success');
+                if (isTracking) syncActivePath();
+            } else {
+                showToast(`Room ${code}: ${amHost ? 'you are the host. Share the code!' : 'you joined the game.'}`, 4000, 'success');
+            }
+        }
+
+        function handleRoomNotFound({ code }) {
+            if (roomCode) {
+                resetSession();
+                showAlert('Room closed', `Room ${roomCode} no longer exists. Host or join a new game.`);
+            } else {
+                showToast(`Room "${code}" not found`, 4000);
+            }
         }
 
         function handlePlayerJoined({ player }) {
-            sessionPlayers.set(player.name, { color: player.color, score: 0 });
+            sessionPlayers.set(player.name, { color: player.color, score: player.score || 0 });
             updatePlayerList();
             showToast(`${player.name} joined the room`, 3000, 'info');
         }
@@ -353,18 +397,14 @@
         function handlePlayerLeft({ playerName: name }) {
             sessionPlayers.delete(name);
             updatePlayerList();
-
-            // Remove their path from the map
-            removeActivePathFromMap(name);
-            activePaths.delete(name);
-
-            showToast(`${name} left the room`, 3000);
+            removeActivePath(name);
+            showToast(`${name} left the room`, 3000, 'info');
         }
 
         function handleHostChanged({ newHostName }) {
             isHost = (newHostName === playerName);
             hostBadge.classList.toggle('hidden', !isHost);
-            showToast(`${newHostName} is now the host`, 4000, 'info');
+            showToast(isHost ? 'You are now the host' : `${newHostName} is now the host`, 4000, 'info');
         }
 
         // ── Path events ───────────────────────────────────────────────────────
@@ -376,123 +416,120 @@
 
         function handleRemotePathDeleted({ playerName: name }) {
             if (name === playerName) return;
-            removeActivePathFromMap(name);
-            activePaths.delete(name);
+            removeActivePath(name);
         }
 
         // ── Territory events ──────────────────────────────────────────────────
-        function handleRemoteTerritoryCapture({ territory, captorName, points }) {
+        function handleTerritoryCaptured({ territory, captorName, points, captorScore }) {
+            if (!territories.some(t => t.id === territory.id)) renderTerritory(territory);
+
+            const sp = sessionPlayers.get(captorName);
+            if (sp) sp.score = captorScore;
+            updatePlayerList();
+
             if (captorName === playerName) {
-                // Our capture was confirmed — update our score with the server-authoritative value
-                // (we already rendered it optimistically; just update score if different)
-                const existingIdx = territories.findIndex(t => t.id === territory.id);
-                if (existingIdx !== -1) {
-                    // Already rendered — update score display
-                    updateUI();
-                }
+                score = captorScore;
+                generateLoreBtn.classList.remove('hidden');
                 showToast(`Territory captured! +${points} points`, 3000, 'success');
             } else {
-                // Someone else captured — render it for us
-                const exists = territories.some(t => t.id === territory.id);
-                if (!exists) {
-                    renderTerritory(territory);
-                }
-                showToast(`${captorName} captured a territory! (+${points} pts)`, 3000, 'info');
+                showToast(`${captorName} captured a territory! (+${points})`, 3000, 'info');
             }
-
-            // Update their score in session players
-            const sp = sessionPlayers.get(captorName);
-            if (sp) {
-                sp.score += points;
-                updatePlayerList();
-            }
+            updateUI();
         }
 
-        function handleClaimRejected({ reason }) {
-            // Roll back the last optimistic territory
-            const last = territories[territories.length - 1];
-            if (last && last.owner === playerName && last.polygon) {
-                map.removeLayer(last.polygon);
-                territories.pop();
-                // Recalculate score
-                const points = Math.max(1, Math.round(last.area / 100));
-                score -= points;
-                saveToLocalStorage();
-                updateUI();
-            }
-            showToast(`Claim rejected: ${reason}`, 4000);
-        }
+        function handleRemoteInterception({ interceptorName, victimName, interceptorScore }) {
+            const sp = sessionPlayers.get(interceptorName);
+            if (sp) sp.score = interceptorScore;
+            updatePlayerList();
 
-        function handleRemoteInterception({ interceptorName, victimName }) {
             if (victimName === playerName) {
                 pathCoordinates = [];
                 if (currentPathPolyline) {
                     map.removeLayer(currentPathPolyline);
                     currentPathPolyline = null;
                 }
-                showToast(`Your path was intercepted by ${interceptorName}!`, 4000);
-            } else if (interceptorName === playerName) {
-                score += 10;
-                saveToLocalStorage();
-                updateUI();
-                showToast(`You intercepted ${victimName}'s path! +10 pts`, 3000, 'success');
+                showToast(`Your path was cut by ${interceptorName}!`, 4000);
             } else {
-                showToast(`${interceptorName} intercepted ${victimName}'s path!`, 2500, 'info');
+                removeActivePath(victimName);
+                if (interceptorName === playerName) {
+                    score = interceptorScore;
+                    updateUI();
+                    showToast(`You cut ${victimName}'s path! +10`, 3000, 'success');
+                } else {
+                    showToast(`${interceptorName} cut ${victimName}'s path!`, 2500, 'info');
+                }
             }
         }
 
         // ─── Session button handlers ──────────────────────────────────────────
+        function readPlayerName() {
+            const name = playerNameInput.value.trim().slice(0, 20);
+            if (!name) {
+                showAlert('Name required', 'Please enter your name first.');
+                return false;
+            }
+            playerName = name;
+            playerNameInput.value = name;
+            savePlayerName();
+            return true;
+        }
+
         function handleHostGame() {
-            playerName = playerNameInput.value.trim() || playerName;
-            if (!playerName) { showAlert('Name required', 'Please enter your name before hosting.'); return; }
-            playerNameInput.value = playerName;
-            saveToLocalStorage();
-            socket.emit('room:create', { playerName });
+            if (!socket.connected) { showToast('Not connected to the server yet', 3000); return; }
+            if (!readPlayerName()) return;
+            socket.emit('room:create', { playerName, playerId });
         }
 
         function handleJoinGame() {
+            if (!socket.connected) { showToast('Not connected to the server yet', 3000); return; }
             const code = roomCodeInput.value.trim().toUpperCase();
-            playerName = playerNameInput.value.trim() || playerName;
-            if (!playerName) { showAlert('Name required', 'Please enter your name before joining.'); return; }
             if (code.length !== 4) { showAlert('Invalid code', 'Enter the 4-character room code.'); return; }
-            playerNameInput.value = playerName;
-            saveToLocalStorage();
-            socket.emit('room:join', { code, playerName });
+            if (!readPlayerName()) return;
+            socket.emit('room:join', { code, playerName, playerId });
         }
 
         function handleLeaveSession() {
-            // Disconnect and reconnect to drop the room
-            socket.disconnect();
-            socket.connect();
+            socket.emit('room:leave');
+            resetSession();
+            showToast('Left the room', 2000, 'info');
+        }
 
-            // Reset local session state
-            roomCode = null;
-            isHost = false;
-            sessionPlayers.clear();
-
-            // Clear all remote paths from map
-            for (const [name] of activePathLayers.entries()) {
-                removeActivePathFromMap(name);
-            }
-            activePaths.clear();
-
-            preJoinUI.classList.remove('hidden');
-            inSessionUI.classList.add('hidden');
-            toggleBtn.disabled = true;
-
+        function resetSession() {
             if (isTracking) {
                 isTracking = false;
                 stopWatchingPosition();
                 stopPathSyncing();
             }
+            clearRoomFromMap();
+            roomCode = null;
+            isHost = false;
+            score = 0;
+            sessionPlayers.clear();
 
+            preJoinUI.classList.remove('hidden');
+            inSessionUI.classList.add('hidden');
+            generateLoreBtn.classList.add('hidden');
+            playerNameInput.disabled = false;
+            toggleBtn.disabled = true;
             updateUI();
-            showToast('Left the room', 2000);
+        }
+
+        function clearRoomFromMap() {
+            for (const t of territories) {
+                if (t.polygon) map.removeLayer(t.polygon);
+            }
+            territories = [];
+            for (const name of [...activePathLayers.keys()]) removeActivePath(name);
+            activePaths.clear();
         }
 
         // ─── Tracking ─────────────────────────────────────────────────────────
         function handleToggleTracking() {
             if (!roomCode) return;
+            if (!window.isSecureContext) {
+                showAlert('HTTPS required', 'GPS only works on https:// pages (or localhost).');
+                return;
+            }
 
             isTracking = !isTracking;
             updateUI();
@@ -503,27 +540,16 @@
             } else {
                 stopWatchingPosition();
                 stopPathSyncing();
-                socket.emit('path:delete', {});
+                socket.emit('path:delete');
             }
         }
 
         function handlePlayerNameChange() {
-            const newName = playerNameInput.value.trim();
-            if (newName && newName !== playerName) {
+            const newName = playerNameInput.value.trim().slice(0, 20);
+            if (newName && newName !== playerName && !roomCode) {
                 playerName = newName;
-                saveToLocalStorage();
+                savePlayerName();
             }
-        }
-
-        function handleReset() {
-            if (!confirm('Reset your territories and score? This cannot be undone.')) return;
-            for (const t of territories) {
-                if (t.owner === playerName && t.polygon) map.removeLayer(t.polygon);
-            }
-            territories = territories.filter(t => t.owner !== playerName);
-            score = 0;
-            saveToLocalStorage();
-            updateUI();
         }
 
         function startWatchingPosition() {
@@ -567,7 +593,9 @@
         }
 
         function onLocationSuccess(position) {
-            const { latitude, longitude } = position.coords;
+            const { latitude, longitude, accuracy } = position.coords;
+            if (accuracy > MAX_ACCURACY_M) return;
+            statusEl.textContent = 'Currently Tracking Your Path...';
             const newCoord = { lat: latitude, lng: longitude };
 
             if (pathCoordinates.length > 0) {
@@ -587,17 +615,21 @@
             pathCoordinates.push(newCoord);
             updateMapElements(newCoord);
 
-            if (checkForInterception()) return;
-
+            checkForInterception();
             checkForTerritoryCapture(pathCoordinates);
         }
 
         function onLocationError(error) {
-            console.error('Geolocation error:', error.message);
+            // Brief GPS dropouts (tunnels, tall buildings) are normal; only give up if permission is denied
+            if (error.code !== error.PERMISSION_DENIED) {
+                statusEl.textContent = 'Waiting for GPS signal...';
+                return;
+            }
             stopWatchingPosition();
+            stopPathSyncing();
             isTracking = false;
             updateUI();
-            showAlert('Location Error', 'Could not get your location. Please enable location services.');
+            showAlert('Location Error', 'Could not get your location. Please enable location services and allow access.');
         }
 
         // ─── Map drawing ──────────────────────────────────────────────────────
@@ -618,68 +650,61 @@
         }
 
         function updateActivePathOnMap(name, path) {
-            const color = getPlayerColor(name);
             let polyline = activePathLayers.get(name);
             if (!polyline) {
-                polyline = L.polyline(path, { color, weight: 4, dashArray: '5,10', opacity: 0.7 }).addTo(map);
+                polyline = L.polyline(path, { color: getPlayerColor(name), weight: 4, dashArray: '5,10', opacity: 0.7 }).addTo(map);
                 activePathLayers.set(name, polyline);
             } else {
                 polyline.setLatLngs(path);
             }
         }
 
-        function removeActivePathFromMap(name) {
+        function removeActivePath(name) {
             const layer = activePathLayers.get(name);
-            if (layer) {
-                map.removeLayer(layer);
-                activePathLayers.delete(name);
-            }
+            if (layer) map.removeLayer(layer);
+            activePathLayers.delete(name);
+            activePaths.delete(name);
         }
 
-        // Shared territory renderer — used for own captures and remote captures
         function renderTerritory(data) {
             const isOwn = data.owner === playerName;
             const color = isOwn ? USER_COLOR : getPlayerColor(data.owner);
-            const fillColor = isOwn ? TERRITORY_COLOR : getPlayerColor(data.owner).replace('45%', '75%').replace('hsl', 'hsla').replace(')', ', 0.3)');
 
             const polygon = L.polygon(data.coords, {
                 color,
-                fillColor,
-                fillOpacity: 0.5,
+                fillColor: isOwn ? TERRITORY_COLOR : color,
+                fillOpacity: isOwn ? 0.5 : 0.25,
                 weight: 2
             }).addTo(map);
 
+            const territory = { ...data, polygon };
             polygon.on('click', () => {
-                const loreText = data.lore ? `\n\nLore: ${data.lore}` : '';
-                showAlert(
-                    `Territory by ${data.owner}`,
-                    `Area: ${Math.round(data.area)} m²${loreText}`
-                );
+                const loreText = territory.lore ? `\n\nLore: ${territory.lore}` : '';
+                showAlert(`Territory by ${territory.owner}`, `Area: ${Math.round(territory.area)} m²${loreText}`);
             });
 
-            territories.push({ ...data, polygon });
+            territories.push(territory);
         }
 
-        // ─── Interception detection ───────────────────────────────────────────
+        // ─── Interception detection (server makes the final call) ─────────────
         function checkForInterception() {
-            if (pathCoordinates.length < 2) return false;
+            if (pathCoordinates.length < 2) return;
+
+            const myLine = turf.lineString(pathCoordinates.map(p => [p.lng, p.lat]));
+            const now = Date.now();
 
             for (const [name, path] of activePaths.entries()) {
-                if (name === playerName || !path || path.length < 2) continue;
+                if (!path || path.length < 2) continue;
+                if (now - (lastInterceptAttempt.get(name) || 0) < INTERCEPT_RETRY_MS) continue;
 
                 try {
-                    const myLine = turf.lineString(pathCoordinates.map(p => [p.lng, p.lat]));
                     const theirLine = turf.lineString(path.map(p => [p.lng, p.lat]));
-                    const intersection = turf.lineIntersect(myLine, theirLine);
-
-                    if (intersection.features.length > 0) {
-                        // Notify server — server will confirm and broadcast path:intercepted
-                        socket.emit('path:intercept', { targetPlayer: name });
-                        return true;
+                    if (turf.lineIntersect(myLine, theirLine).features.length > 0) {
+                        lastInterceptAttempt.set(name, now);
+                        socket.emit('path:intercept', { targetPlayer: name, path: pathCoordinates });
                     }
-                } catch (_) { /* ignore malformed paths */ }
+                } catch (_) { /* malformed remote path */ }
             }
-            return false;
         }
 
         // ─── Territory capture ────────────────────────────────────────────────
@@ -693,63 +718,38 @@
             for (let i = 0; i < currentPath.length - 3; i++) {
                 const seg = turf.lineString([
                     [currentPath[i].lng, currentPath[i].lat],
-                    [currentPath[i+1].lng, currentPath[i+1].lat]
+                    [currentPath[i + 1].lng, currentPath[i + 1].lat]
                 ]);
 
                 const intersection = turf.lineIntersect(latestSegment, seg);
                 if (intersection.features.length === 0) continue;
 
                 const intersectionPoint = intersection.features[0].geometry.coordinates;
-
+                // The latest point has already overshot the crossing, so the loop ends at the intersection
                 const ring = [
                     intersectionPoint,
-                    ...currentPath.slice(i + 1).map(p => [p.lng, p.lat]),
-                    intersectionPoint
+                    ...currentPath.slice(i + 1, currentPath.length - 1).map(p => [p.lng, p.lat])
                 ];
+                if (turf.booleanClockwise([...ring, ring[0]])) ring.reverse();
+                const closedRing = [...ring, ring[0]];
 
-                const ringWithoutClose = ring.slice(0, -1);
-                if (turf.booleanClockwise(ringWithoutClose)) ringWithoutClose.reverse();
-                const closedRing = [...ringWithoutClose, ringWithoutClose[0]];
-
-                const turfPolygon = turf.polygon([closedRing]);
-                const area = turf.area(turfPolygon);
-
+                let area;
+                try {
+                    area = turf.area(turf.polygon([closedRing]));
+                } catch (_) {
+                    continue;
+                }
                 if (area < MIN_TERRITORY_AREA_M2) continue;
 
-                const center = turf.centerOfMass(turfPolygon).geometry.coordinates;
-                const latLngCoords = closedRing.map(([lng, lat]) => [lat, lng]);
-
-                const id = `territory_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-                const points = Math.max(1, Math.round(area / 100));
-
-                // Optimistic local render
-                const territory = {
-                    id,
-                    coords: latLngCoords,
-                    center: [center[1], center[0]],
-                    area,
-                    owner: playerName,
-                    timestamp: new Date().toISOString()
-                };
-                renderTerritory(territory);
-
-                score += points;
-                saveToLocalStorage();
-                updateUI();
-                generateLoreBtn.classList.remove('hidden');
-
-                // Restart path from intersection point
-                pathCoordinates = [{ lat: intersectionPoint[1], lng: intersectionPoint[0] }];
-                if (currentPathPolyline) currentPathPolyline.setLatLngs(pathCoordinates);
-
-                // Ask server to validate and broadcast
+                // Server validates, scores and broadcasts territory:captured to everyone
                 socket.emit('territory:claim', {
-                    id,
-                    coords: latLngCoords,
-                    center: territory.center,
+                    id: `territory_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
+                    coords: closedRing.map(([lng, lat]) => [lat, lng]),
                     area
                 });
 
+                pathCoordinates = [{ lat: intersectionPoint[1], lng: intersectionPoint[0] }];
+                if (currentPathPolyline) currentPathPolyline.setLatLngs(pathCoordinates);
                 return;
             }
         }
@@ -773,26 +773,21 @@ Area: Approximately ${area.toFixed(0)} square meters.
 Invent a name for the area, and describe a mythical event, a forgotten ruin, a natural wonder, or a quirky local legend associated with it. Be creative and engaging.`;
 
             try {
-                const lore = await callLoreAPI(prompt, center, area);
-                lastTerritory.lore = lore;
-                showAlert('Territory Lore', lore);
+                const response = await fetch('/api/generate-lore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Lore request failed');
+                lastTerritory.lore = data.text;
+                showAlert('Territory Lore', data.text);
             } catch (error) {
                 console.error('Lore error:', error);
-                showAlert('Error', 'Failed to generate lore. Make sure the server has GEMINI_API_KEY set.');
+                showAlert('Lore unavailable', error.message);
             } finally {
                 setLoreButtonLoading(false);
             }
-        }
-
-        async function callLoreAPI(prompt, center, area) {
-            const response = await fetch('/api/generate-lore', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt, center, area, player: playerName })
-            });
-            if (!response.ok) throw new Error('Server lore request failed');
-            const data = await response.json();
-            return data.text;
         }
 
         function setLoreButtonLoading(isLoading) {
@@ -803,8 +798,6 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
 
         // ─── UI helpers ───────────────────────────────────────────────────────
         function updateUI() {
-            const inSession = !!roomCode;
-
             if (isTracking) {
                 toggleBtn.textContent = 'Stop';
                 toggleBtn.classList.replace('bg-green-500', 'bg-red-500');
@@ -814,7 +807,7 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
                 toggleBtn.textContent = 'Start';
                 toggleBtn.classList.replace('bg-red-500', 'bg-green-500');
                 toggleBtn.classList.replace('hover:bg-red-600', 'hover:bg-green-600');
-                statusEl.textContent = inSession ? 'Press Start to Begin' : 'Join or host a game to play';
+                statusEl.textContent = roomCode ? 'Press Start to Begin' : 'Join or host a game to play';
             }
 
             const myCount = territories.filter(t => t.owner === playerName).length;
@@ -823,11 +816,12 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
 
         function updatePlayerList() {
             playerListEl.innerHTML = '';
-            for (const [name, info] of sessionPlayers.entries()) {
+            const sorted = [...sessionPlayers.entries()].sort((a, b) => b[1].score - a[1].score);
+            for (const [name, info] of sorted) {
                 const chip = document.createElement('span');
                 chip.className = 'px-2 py-0.5 rounded-full text-white text-xs font-medium';
                 chip.style.backgroundColor = info.color;
-                chip.textContent = name === playerName ? `${name} (you)` : name;
+                chip.textContent = `${name === playerName ? `${name} (you)` : name} · ${info.score}`;
                 playerListEl.appendChild(chip);
             }
         }
@@ -844,7 +838,7 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
         }
 
         function showToast(message, duration = 3000, type = 'error') {
-            document.querySelectorAll('.toast').forEach(t => document.body.removeChild(t));
+            document.querySelectorAll('.toast').forEach(t => t.remove());
 
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;
@@ -854,7 +848,7 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
             setTimeout(() => toast.classList.add('show'), 10);
             setTimeout(() => {
                 toast.classList.remove('show');
-                setTimeout(() => { if (toast.parentNode) document.body.removeChild(toast); }, 300);
+                setTimeout(() => toast.remove(), 300);
             }, duration);
         }
 
@@ -868,6 +862,7 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
 
         // ─── Debug helpers ────────────────────────────────────────────────────
         function simulatePathCapture() {
+            if (!roomCode) { showToast('Join or host a room first', 3000); return; }
             const c = map.getCenter();
             const s = 0.0003;
             pathCoordinates = [
@@ -875,7 +870,7 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
                 { lat: c.lat - s, lng: c.lng + s },
                 { lat: c.lat + s, lng: c.lng + s },
                 { lat: c.lat + s, lng: c.lng - s },
-                { lat: c.lat - s, lng: c.lng - s }
+                { lat: c.lat - s * 1.5, lng: c.lng - s * 0.5 }
             ];
             if (currentPathPolyline) map.removeLayer(currentPathPolyline);
             currentPathPolyline = L.polyline(pathCoordinates, { color: USER_COLOR, weight: 5 }).addTo(map);
@@ -883,11 +878,7 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
         }
 
         function simulateInterception() {
-            const fake = 'TestPlayer';
-            activePaths.set(fake, pathCoordinates.map(p => ({ lat: p.lat + 0.0001, lng: p.lng })));
-            updateActivePathOnMap(fake, activePaths.get(fake));
-            // Simulate the server confirming an interception
-            handleRemoteInterception({ interceptorName: fake, victimName: playerName });
+            handleRemoteInterception({ interceptorName: 'TestPlayer', victimName: playerName, interceptorScore: 0 });
         }
     </script>
 </body>
