@@ -91,12 +91,21 @@ function generateRoomCode() {
     return code;
 }
 
-function playerColor(name) {
+// Must match PLAYER_COLORS in geoquest_Version4.html
+const PLAYER_COLORS = ['#4C8DF6', '#F28B30', '#1FB5A3', '#E5484D', '#8E6CF0', '#E8B020', '#2BA8E0', '#46B864', '#E25CA8', '#7C8B9E'];
+
+function hashColor(name) {
     let hash = 0;
     for (let i = 0; i < name.length; i++) {
         hash = name.charCodeAt(i) + ((hash << 5) - hash);
     }
-    return `hsl(${Math.abs(hash) % 360}, 70%, 45%)`;
+    return PLAYER_COLORS[Math.abs(hash) % PLAYER_COLORS.length];
+}
+
+// Hand out distinct colors within a room so players are easy to tell apart on the map
+function pickColor(room, name) {
+    const used = new Set([...room.players.values()].map(p => p.color));
+    return PLAYER_COLORS.find(c => !used.has(c)) || hashColor(name);
 }
 
 function hostName(room) {
@@ -121,11 +130,13 @@ function getContext(socket) {
 }
 
 function addPlayer(socket, room, name, playerId) {
-    // Same browser tab reconnecting: carry over its score and drop the stale socket
+    // Same browser tab reconnecting: carry over its score and color, and drop the stale socket
     let score = 0;
+    let color = null;
     for (const [sid, p] of room.players) {
         if (playerId && p.playerId === playerId) {
             score = p.score;
+            color = p.color;
             room.players.delete(sid);
             if (room.hostSocketId === sid) room.hostSocketId = socket.id;
             io.sockets.sockets.get(sid)?.disconnect(true);
@@ -136,7 +147,7 @@ function addPlayer(socket, room, name, playerId) {
         socketId: socket.id,
         playerId,
         name,
-        color: playerColor(name),
+        color: color || pickColor(room, name),
         score,
         activePath: [],
         joinedAt: Date.now()
@@ -279,6 +290,7 @@ io.on('connection', (socket) => {
             center: validation.center,
             area: validation.serverArea,
             owner: player.name,
+            color: player.color,
             timestamp: new Date().toISOString(),
             lore: null
         };

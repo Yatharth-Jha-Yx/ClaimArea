@@ -2,162 +2,663 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GeoQuest: Territorial GPS Game</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#111316" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#F8F9FB" media="(prefers-color-scheme: light)">
+    <title>GeoQuest</title>
 
-    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@500&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..24,400,0..1,0&display=block">
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-
-    <script src='https://unpkg.com/@turf/turf@6.5.0/turf.min.js'></script>
+    <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 
     <!-- Served by server.js -->
     <script src="/socket.io/socket.io.js"></script>
 
     <style>
+        /* ─── Material 3 tokens ─────────────────────────────────────────── */
+        :root {
+            color-scheme: dark;
+            --primary: #A8C7FA;
+            --on-primary: #062E6F;
+            --secondary-container: #2B3646;
+            --on-secondary-container: #D3E3FD;
+            --error: #F2B8B5;
+            --error-container: #8C1D18;
+            --on-error-container: #F9DEDC;
+            --success: #6DD58C;
+            --warning: #F4C04E;
+            --surface-2: #1E2024;
+            --surface-3: #2A2D32;
+            --on-surface: #E3E3E6;
+            --on-surface-variant: #C4C7CF;
+            --outline: #8E9199;
+            --outline-variant: rgba(255, 255, 255, 0.08);
+            --inverse-surface: #E3E3E6;
+            --inverse-on-surface: #1E2024;
+            --glass: rgba(24, 26, 30, 0.82);
+            --glass-strong: rgba(24, 26, 30, 0.92);
+            --scrim: rgba(0, 0, 0, 0.55);
+            --map-bg: #0E0F11;
+            --shadow: 0 10px 30px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
+            --font: 'Roboto', system-ui, -apple-system, 'Segoe UI', sans-serif;
+            --mono: 'Roboto Mono', ui-monospace, monospace;
+        }
+        @media (prefers-color-scheme: light) {
+            :root {
+                color-scheme: light;
+                --primary: #0B57D0;
+                --on-primary: #FFFFFF;
+                --secondary-container: #DDE6F6;
+                --on-secondary-container: #041E49;
+                --error: #B3261E;
+                --error-container: #F9DEDC;
+                --on-error-container: #410E0B;
+                --success: #188038;
+                --warning: #B06000;
+                --surface-2: #F0F2F5;
+                --surface-3: #E6E9EE;
+                --on-surface: #1B1C1F;
+                --on-surface-variant: #4A4D55;
+                --outline: #74777F;
+                --outline-variant: rgba(0, 0, 0, 0.08);
+                --inverse-surface: #2E3133;
+                --inverse-on-surface: #F1F0F4;
+                --glass: rgba(255, 255, 255, 0.84);
+                --glass-strong: rgba(255, 255, 255, 0.94);
+                --scrim: rgba(0, 0, 0, 0.32);
+                --map-bg: #F5F5F3;
+                --shadow: 0 10px 30px rgba(16, 24, 40, 0.14), 0 2px 8px rgba(16, 24, 40, 0.08);
+            }
+        }
+
+        /* ─── Base ──────────────────────────────────────────────────────── */
+        * { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; }
         body {
+            font-family: var(--font);
+            background: var(--map-bg);
+            color: var(--on-surface);
+            -webkit-font-smoothing: antialiased;
+            overflow: hidden;
+        }
+        #map { position: fixed; inset: 0; background: var(--map-bg); }
+        button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+        input { font: inherit; color: inherit; }
+        [hidden] { display: none !important; }
+
+        .icon {
+            font-family: 'Material Symbols Rounded';
+            font-weight: normal;
+            font-style: normal;
+            font-size: 20px;
+            line-height: 1;
+            letter-spacing: normal;
+            text-transform: none;
+            display: inline-block;
+            white-space: nowrap;
+            direction: ltr;
+            font-feature-settings: 'liga';
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            user-select: none;
+        }
+        .icon.filled { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+
+        .glass {
+            background: var(--glass);
+            -webkit-backdrop-filter: blur(20px) saturate(150%);
+            backdrop-filter: blur(20px) saturate(150%);
+            border: 1px solid var(--outline-variant);
+            box-shadow: var(--shadow);
+        }
+
+        /* State layer: hover / press feedback */
+        .state { position: relative; overflow: hidden; isolation: isolate; }
+        .state::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: currentColor;
+            opacity: 0;
+            transition: opacity 0.15s;
+            z-index: -1;
+        }
+        .state:hover::after { opacity: 0.08; }
+        .state:active::after { opacity: 0.14; }
+        .state:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+        /* ─── Buttons ───────────────────────────────────────────────────── */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            height: 48px;
+            padding: 0 24px;
+            border-radius: 24px;
+            font-size: 15px;
+            font-weight: 500;
+            letter-spacing: 0.01em;
+            transition: background-color 0.2s, color 0.2s, transform 0.1s;
+        }
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled { opacity: 0.38; pointer-events: none; }
+        .btn-filled { background: var(--primary); color: var(--on-primary); }
+        .btn-tonal { background: var(--secondary-container); color: var(--on-secondary-container); }
+        .btn-danger { background: var(--error-container); color: var(--on-error-container); }
+        .btn-text { color: var(--primary); height: 40px; padding: 0 14px; }
+        .btn-block { width: 100%; }
+        .btn-lg { height: 56px; border-radius: 28px; font-size: 16px; }
+        .btn-lg .icon { font-size: 24px; }
+
+        .icon-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: inline-grid;
+            place-items: center;
+            color: var(--on-surface-variant);
+        }
+
+        /* ─── Text fields (outlined) ────────────────────────────────────── */
+        .field { position: relative; flex: 1; min-width: 0; }
+        .field input {
+            width: 100%;
+            height: 56px;
+            padding: 20px 16px 6px;
+            border-radius: 14px;
+            border: 1px solid var(--outline);
+            background: transparent;
+            outline: none;
+            font-size: 16px;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .field label {
+            position: absolute;
+            left: 17px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 16px;
+            color: var(--on-surface-variant);
+            pointer-events: none;
+            transition: top 0.15s, font-size 0.15s, color 0.15s;
+        }
+        .field input:focus { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+        .field input:focus + label,
+        .field input:not(:placeholder-shown) + label { top: 15px; font-size: 12px; }
+        .field input:focus + label { color: var(--primary); }
+        .code-field input { font-family: var(--mono); letter-spacing: 0.3em; text-transform: uppercase; }
+
+        /* ─── Top bar ───────────────────────────────────────────────────── */
+        .topbar {
+            position: fixed;
+            z-index: 1001;
+            top: calc(12px + env(safe-area-inset-top));
+            left: 12px;
+            right: 12px;
+            height: 56px;
+            border-radius: 28px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 0 8px 0 18px;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-right: auto;
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+        }
+        .brand .icon { color: var(--primary); font-size: 22px; }
+        .room-chip {
+            display: none;
+            align-items: center;
+            gap: 6px;
+            height: 36px;
+            padding: 0 10px 0 14px;
+            border-radius: 18px;
+            background: var(--surface-3);
+            font-family: var(--mono);
+            font-size: 15px;
+            letter-spacing: 0.2em;
+        }
+        .room-chip .icon { font-size: 18px; color: var(--on-surface-variant); }
+        .in-session .room-chip { display: inline-flex; }
+        .conn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 10px;
+            font-size: 12px;
+            color: var(--on-surface-variant);
+        }
+        .conn-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--error);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 22%, transparent);
+        }
+        .conn.online .conn-dot {
+            background: var(--success);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
+        }
+        #leave-session-btn { display: none; }
+        .in-session #leave-session-btn { display: inline-grid; }
+        @media (max-width: 440px) {
+            .in-session #connection-label { display: none; }
+        }
+
+        /* ─── Floating action button ────────────────────────────────────── */
+        .fabs {
+            position: fixed;
+            z-index: 1000;
+            right: 12px;
+            top: calc(80px + env(safe-area-inset-top));
             display: flex;
             flex-direction: column;
-            height: 100vh;
-            margin: 0;
-            font-family: 'Inter', sans-serif;
+            gap: 10px;
         }
-        #map {
-            flex-grow: 1;
-            background-color: #e5e7eb;
+        .fab {
+            width: 48px;
+            height: 48px;
+            border-radius: 16px;
+            display: grid;
+            place-items: center;
+            color: var(--on-surface-variant);
         }
-        .leaflet-marker-icon {
-            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
-        }
-        .spinner {
-            border: 2px solid #f3f3f3;
-            border-top: 2px solid #3498db;
-            border-radius: 50%;
-            width: 16px;
-            height: 16px;
-            animation: spin 1s linear infinite;
-            display: inline-block;
-            margin-right: 8px;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .toast {
+        .fab.active { color: var(--primary); }
+        .fab.active .icon { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+
+        /* ─── Bottom sheet ──────────────────────────────────────────────── */
+        .sheet {
             position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background-color: #ef4444;
-            color: white;
-            padding: 10px 20px;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            z-index: 2000;
-            opacity: 0;
-            transition: opacity 0.3s;
-            max-width: calc(100vw - 32px);
-            text-align: center;
+            z-index: 1000;
+            left: 12px;
+            right: 12px;
+            bottom: calc(12px + env(safe-area-inset-bottom));
+            border-radius: 28px;
+            padding: 0 20px 14px;
+            max-height: calc(100dvh - 120px);
+            overflow-y: auto;
+            overscroll-behavior: contain;
         }
-        .toast.show { opacity: 1; }
-        .toast.success { background-color: #10b981; }
-        .toast.info { background-color: #3b82f6; }
+        .handle { display: flex; justify-content: center; width: 100%; padding: 10px 0 10px; }
+        .handle span { width: 32px; height: 4px; border-radius: 2px; background: var(--outline); opacity: 0.5; }
+        .headline { margin: 4px 2px 6px; font-size: 22px; font-weight: 400; }
+        .supporting { margin: 0 2px 18px; font-size: 14px; line-height: 1.5; color: var(--on-surface-variant); }
+        .stack { display: flex; flex-direction: column; gap: 12px; }
+        .row { display: flex; gap: 8px; align-items: center; }
+        .row .btn { height: 56px; border-radius: 16px; }
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 2px 0;
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--on-surface-variant);
+        }
+        .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--outline-variant); }
+
+        #in-session-ui { display: none; }
+        .in-session #in-session-ui { display: block; }
+        .in-session #pre-join-ui { display: none; }
+
+        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+        .stat { background: var(--surface-2); border-radius: 18px; padding: 12px 14px; }
+        .stat-label {
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--on-surface-variant);
+        }
+        .stat-value {
+            margin-top: 4px;
+            font-size: 22px;
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+        .stat-value small { margin-left: 2px; font-size: 13px; font-weight: 400; color: var(--on-surface-variant); }
+
+        .run-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 0 4px 12px;
+            font-size: 13px;
+            color: var(--on-surface-variant);
+        }
+        .run-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--outline); }
+        .run-status[data-state="tracking"] .run-dot { background: var(--success); animation: blink 1.6s ease-in-out infinite; }
+        .run-status[data-state="waiting"] .run-dot { background: var(--warning); }
+        @keyframes blink { 50% { opacity: 0.3; } }
+
+        #generate-lore-btn { display: none; margin-top: 8px; }
+        .can-lore #generate-lore-btn { display: flex; }
+
+        .section-label {
+            margin: 18px 4px 4px;
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--on-surface-variant);
+        }
+        .players { list-style: none; margin: 0; padding: 0; }
+        .player { display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 4px; }
+        .swatch { flex: none; width: 10px; height: 10px; border-radius: 50%; }
+        .player-name {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 14px;
+        }
+        .host-icon { margin-left: 6px; font-size: 16px; color: var(--warning); vertical-align: -3px; }
+        .tag {
+            margin-left: 6px;
+            padding: 2px 8px;
+            border-radius: 8px;
+            background: var(--surface-3);
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--on-surface-variant);
+        }
+        .player-score { font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+        .sheet.collapsed .collapsible { display: none; }
+
+        .attrib { margin-top: 12px; text-align: center; font-size: 11px; color: var(--on-surface-variant); opacity: 0.8; }
+        .attrib a { color: inherit; }
+
+        @media (min-width: 768px) {
+            .topbar { top: 20px; left: 20px; right: 20px; }
+            .fabs { top: 92px; right: 20px; }
+            .sheet { left: 20px; right: auto; bottom: 20px; width: 380px; }
+        }
+
+        /* ─── Snackbar ──────────────────────────────────────────────────── */
+        .snackbar {
+            position: fixed;
+            z-index: 2100;
+            left: 50%;
+            top: calc(80px + env(safe-area-inset-top));
+            transform: translate(-50%, -8px);
+            opacity: 0;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: max-content;
+            max-width: min(520px, calc(100vw - 24px));
+            padding: 12px 16px;
+            border-radius: 14px;
+            background: var(--inverse-surface);
+            color: var(--inverse-on-surface);
+            font-size: 14px;
+            box-shadow: var(--shadow);
+            transition: opacity 0.2s, transform 0.2s;
+        }
+        .snackbar.show { opacity: 1; transform: translate(-50%, 0); }
+        @media (min-width: 768px) { .snackbar { top: 92px; } }
+
+        /* ─── Dialog ────────────────────────────────────────────────────── */
+        .scrim {
+            position: fixed;
+            inset: 0;
+            z-index: 2000;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: var(--scrim);
+        }
+        .dialog {
+            width: 100%;
+            max-width: 400px;
+            padding: 24px 24px 16px;
+            border-radius: 28px;
+            background: var(--surface-2);
+            box-shadow: var(--shadow);
+            animation: pop 0.18s ease-out;
+        }
+        .dialog h2 { margin: 0 0 12px; font-size: 22px; font-weight: 400; }
+        .dialog p {
+            margin: 0;
+            max-height: 50vh;
+            overflow-y: auto;
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--on-surface-variant);
+            white-space: pre-wrap;
+        }
+        .dialog-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+        @keyframes pop { from { opacity: 0; transform: scale(0.96); } }
+
+        /* ─── Debug panel ───────────────────────────────────────────────── */
+        .debug {
+            position: fixed;
+            z-index: 1002;
+            left: 12px;
+            top: calc(80px + env(safe-area-inset-top));
+            width: 220px;
+            padding: 14px;
+            border-radius: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .debug .btn { height: 40px; font-size: 14px; }
+        .debug-title { margin: 0 4px 2px; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--on-surface-variant); }
+        @media (min-width: 768px) { .debug { left: 420px; top: 92px; } }
+
+        /* ─── Map markers & layers ──────────────────────────────────────── */
+        .leaflet-container { background: var(--map-bg); font-family: var(--font); }
+        .marker-icon { background: none; border: 0; }
+        .me, .peer { position: absolute; left: 0; top: 0; }
+        .me-dot {
+            position: absolute;
+            left: -9px;
+            top: -9px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--c);
+            border: 3px solid #fff;
+            box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+        }
+        .me-halo {
+            position: absolute;
+            left: -20px;
+            top: -20px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--c);
+            animation: halo 2.4s ease-out infinite;
+        }
+        @keyframes halo {
+            0% { transform: scale(0.45); opacity: 0.5; }
+            100% { transform: scale(1.5); opacity: 0; }
+        }
+        .me-heading {
+            position: absolute;
+            left: -22px;
+            top: -22px;
+            width: 44px;
+            height: 44px;
+            display: none;
+            transition: transform 0.3s;
+        }
+        .me-heading.on { display: block; }
+        .me-heading::before {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 0;
+            transform: translateX(-50%);
+            border-left: 7px solid transparent;
+            border-right: 7px solid transparent;
+            border-bottom: 11px solid var(--c);
+            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+        }
+        .peer { transition: opacity 0.3s; }
+        .peer.stale { opacity: 0.45; }
+        .peer-dot {
+            position: absolute;
+            left: -7px;
+            top: -7px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--c);
+            border: 2px solid #fff;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+        }
+        .peer-label {
+            position: absolute;
+            left: 0;
+            top: 12px;
+            transform: translateX(-50%);
+            padding: 3px 8px;
+            border-radius: 10px;
+            border: 1px solid var(--outline-variant);
+            background: var(--glass-strong);
+            color: var(--on-surface);
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+        }
+        .leaflet-interactive.territory-new { animation: claim 1.4s ease-out; }
+        @keyframes claim { 0% { fill-opacity: 0.7; } 100% { fill-opacity: 0.22; } }
+
+        @media (prefers-reduced-motion: reduce) {
+            .me-halo, .run-status[data-state="tracking"] .run-dot, .leaflet-interactive.territory-new { animation: none; }
+        }
     </style>
 </head>
-<body class="bg-gray-100">
+<body>
 
-    <div id="map"></div>
+    <div id="map" aria-label="Map"></div>
 
-    <!-- Main UI Overlay -->
-    <div id="overlay" class="fixed bottom-4 left-4 right-4 md:bottom-8 md:left-auto md:right-8 md:w-96 bg-white/95 backdrop-blur-sm p-5 rounded-2xl shadow-2xl text-center z-[1000]">
-        <div class="flex justify-between items-center mb-2">
-            <h1 class="text-2xl font-bold text-gray-800">GeoQuest</h1>
-            <div class="text-sm text-gray-500 flex items-center gap-1">
-                <span id="connection-dot" style="color:#ef4444; font-size:18px; line-height:1">•</span>
-                <span id="connection-label">Offline</span>
-            </div>
+    <!-- Top app bar -->
+    <header class="topbar glass">
+        <div class="brand"><span class="icon filled" aria-hidden="true">explore</span>GeoQuest</div>
+        <button id="room-chip" class="room-chip state" title="Copy room code" aria-label="Copy room code">
+            <span id="room-code-display"></span>
+            <span class="icon" aria-hidden="true">content_copy</span>
+        </button>
+        <div id="conn" class="conn" role="status">
+            <span class="conn-dot"></span><span id="connection-label">Offline</span>
         </div>
+        <button id="leave-session-btn" class="icon-btn state" title="Leave room" aria-label="Leave room">
+            <span class="icon" aria-hidden="true">logout</span>
+        </button>
+    </header>
 
-        <!-- Player name -->
-        <div class="mb-3">
-            <input type="text" id="player-name" placeholder="Your name" maxlength="20"
-                   class="w-full p-2 border rounded-lg text-center disabled:bg-gray-100 disabled:text-gray-500" />
-        </div>
+    <!-- Map controls -->
+    <div class="fabs">
+        <button id="recenter-btn" class="fab glass state active" title="Center on me" aria-label="Center on me">
+            <span class="icon" aria-hidden="true">my_location</span>
+        </button>
+    </div>
 
-        <!-- Session panel -->
-        <div id="session-panel" class="mb-3">
-            <div id="pre-join-ui">
-                <button id="host-game-btn"
-                        class="w-full bg-indigo-500 text-white font-bold py-2 px-4 rounded-full mb-2 hover:bg-indigo-600 transition-colors">
-                    Host Game
+    <!-- Bottom sheet -->
+    <section id="sheet" class="sheet glass">
+        <button id="sheet-handle" class="handle" aria-label="Expand or collapse panel"><span></span></button>
+
+        <div id="pre-join-ui">
+            <h1 class="headline">Claim your streets</h1>
+            <p class="supporting">Walk a loop to capture the ground inside it. Cross a rival's trail to cut it.</p>
+            <div class="stack">
+                <div class="field">
+                    <input id="player-name" type="text" placeholder=" " maxlength="20" autocomplete="nickname" spellcheck="false">
+                    <label for="player-name">Your name</label>
+                </div>
+                <button id="host-game-btn" class="btn btn-filled btn-block state">
+                    <span class="icon" aria-hidden="true">add</span>Host a game
                 </button>
-                <div class="flex gap-2">
-                    <input type="text" id="room-code-input" placeholder="Room code (e.g. AB3F)"
-                           class="flex-1 min-w-0 p-2 border rounded-lg text-center uppercase tracking-widest font-mono"
-                           maxlength="4" autocomplete="off" />
-                    <button id="join-game-btn"
-                            class="bg-amber-500 text-white font-bold py-2 px-4 rounded-full hover:bg-amber-600 transition-colors">
-                        Join
-                    </button>
-                </div>
-            </div>
-
-            <div id="in-session-ui" class="hidden">
-                <div class="flex justify-between items-center bg-gray-100 rounded-lg p-2">
-                    <div class="flex items-center gap-2">
-                        <span class="text-xs text-gray-500">Room</span>
-                        <span id="room-code-display"
-                              class="font-mono font-bold text-indigo-600 text-lg tracking-widest"></span>
-                        <span id="host-badge"
-                              class="hidden text-xs bg-yellow-400 text-yellow-900 px-1.5 py-0.5 rounded font-bold">HOST</span>
+                <div class="divider">or join</div>
+                <div class="row">
+                    <div class="field code-field">
+                        <input id="room-code-input" type="text" placeholder=" " maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false">
+                        <label for="room-code-input">Room code</label>
                     </div>
-                    <button id="leave-session-btn" class="text-xs text-red-500 hover:underline">Leave</button>
+                    <button id="join-game-btn" class="btn btn-tonal state">Join</button>
                 </div>
-                <div id="player-list" class="mt-1 text-xs text-gray-500 flex flex-wrap gap-1"></div>
             </div>
         </div>
 
-        <p id="status" class="text-gray-600 my-2">Join or host a game to play</p>
-        <p id="stats" class="text-sm font-medium text-gray-700 mb-4">Captured Territories: 0 | Score: 0</p>
+        <div id="in-session-ui">
+            <div class="stats">
+                <div class="stat"><div class="stat-label">Score</div><div id="stat-score" class="stat-value">0</div></div>
+                <div class="stat"><div class="stat-label">Zones</div><div id="stat-zones" class="stat-value">0</div></div>
+                <div class="stat"><div class="stat-label">Trail</div><div id="stat-path" class="stat-value">0<small>m</small></div></div>
+            </div>
+            <div id="run-status" class="run-status" data-state="idle">
+                <span class="run-dot"></span><span id="status">Press start and walk a loop</span>
+            </div>
+            <button id="toggle-tracking-btn" class="btn btn-filled btn-block btn-lg state"></button>
+            <div class="collapsible">
+                <button id="generate-lore-btn" class="btn btn-tonal btn-block state">
+                    <span class="icon" aria-hidden="true">auto_awesome</span><span id="lore-btn-text">Generate territory lore</span>
+                </button>
+                <div class="section-label">Players</div>
+                <ul id="player-list" class="players"></ul>
+            </div>
+        </div>
 
-        <button id="toggle-tracking-btn"
-                class="w-full bg-green-500 text-white font-bold py-3 px-6 rounded-full text-lg shadow-lg hover:bg-green-600 active:scale-95 transition-all duration-200 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled>
-            Start
-        </button>
+        <div class="attrib">
+            © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
+            · © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>
+        </div>
+    </section>
 
-        <button id="generate-lore-btn"
-                class="hidden w-full bg-purple-500 text-white font-bold py-3 px-6 rounded-full text-lg shadow-lg hover:bg-purple-600 active:scale-95 transition-all duration-200 ease-in-out mt-3 items-center justify-center">
-            <span id="lore-btn-text">✨ Generate Territory Lore</span>
-            <div id="lore-btn-spinner" class="spinner hidden"></div>
-        </button>
+    <!-- Snackbar -->
+    <div id="snackbar" class="snackbar" role="status" aria-live="polite">
+        <span id="snackbar-icon" class="icon" aria-hidden="true"></span>
+        <span id="snackbar-text"></span>
     </div>
 
-    <!-- Modal -->
-    <div id="modal" class="hidden fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4">
-        <div class="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl text-center">
-            <h2 id="modal-title" class="text-xl font-bold mb-2"></h2>
-            <p id="modal-message" class="text-gray-600 mb-6 whitespace-pre-wrap"></p>
-            <button id="modal-close-btn"
-                    class="bg-blue-500 text-white font-bold py-2 px-8 rounded-full hover:bg-blue-600 transition-colors">
-                OK
-            </button>
+    <!-- Dialog -->
+    <div id="modal" class="scrim" hidden>
+        <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+            <h2 id="modal-title"></h2>
+            <p id="modal-message"></p>
+            <div class="dialog-actions">
+                <button id="modal-close-btn" class="btn btn-text state">OK</button>
+            </div>
         </div>
     </div>
 
-    <!-- Debug Panel (toggle with 'd') -->
-    <div id="debug-panel" class="hidden fixed bottom-4 left-4 p-4 bg-white/90 backdrop-blur-sm rounded-xl shadow-xl z-[1500] w-64">
-        <h3 class="font-bold text-gray-800 mb-2">Debug Controls</h3>
-        <button id="simulate-btn" class="w-full bg-amber-500 text-white py-2 px-4 rounded mb-2">Simulate Capture</button>
-        <button id="intercept-btn" class="w-full bg-red-500 text-white py-2 px-4 rounded mb-2">Test Interception</button>
-        <div class="text-xs text-gray-500 mt-2">Press 'd' to toggle debug panel</div>
+    <!-- Debug panel (press 'd') -->
+    <div id="debug-panel" class="debug glass" hidden>
+        <div class="debug-title">Debug</div>
+        <button id="simulate-btn" class="btn btn-tonal state">Simulate capture</button>
+        <button id="intercept-btn" class="btn btn-tonal state">Test interception</button>
     </div>
 
     <script>
         // ─── Constants ────────────────────────────────────────────────────────
-        const USER_COLOR = '#3498db';
-        const TERRITORY_COLOR = 'rgba(52, 152, 219, 0.3)';
+        // Must match PLAYER_COLORS in server.js
+        const PLAYER_COLORS = ['#4C8DF6', '#F28B30', '#1FB5A3', '#E5484D', '#8E6CF0', '#E8B020', '#2BA8E0', '#46B864', '#E25CA8', '#7C8B9E'];
+        const TILES = {
+            dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+            light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+        };
         const MIN_TERRITORY_AREA_M2 = 100;
         const JITTER_THRESHOLD_M = 3;
         const MAX_ACCURACY_M = 50;
@@ -166,8 +667,13 @@
 
         // ─── Map & tracking state ─────────────────────────────────────────────
         let map = null;
-        let userMarker = null;
+        let tileLayer = null;
+        let meMarker = null;
+        let accuracyCircle = null;
         let currentPathPolyline = null;
+        let currentPathGlow = null;
+        let lastFix = null;
+        let followMe = true;
 
         let isTracking = false;
         let watchId = null;
@@ -180,43 +686,49 @@
 
         let activePaths = new Map();      // name → [{lat,lng}]
         let activePathLayers = new Map(); // name → L.Polyline
-        let lastInterceptAttempt = new Map(); // name → timestamp
+        let peerMarkers = new Map();      // name → L.Marker
+        let lastInterceptAttempt = new Map();
 
         // ─── Session state ────────────────────────────────────────────────────
         let socket = null;
         let roomCode = null;
         let isHost = false;
+        let hostName = null;
         let sessionPlayers = new Map(); // name → {color, score}
 
         // Per-tab identity so a reconnecting tab reclaims its seat (and two tabs stay distinct)
         const playerId = getOrCreatePlayerId();
 
         // ─── DOM refs ─────────────────────────────────────────────────────────
-        const toggleBtn         = document.getElementById('toggle-tracking-btn');
-        const generateLoreBtn   = document.getElementById('generate-lore-btn');
-        const loreBtnText       = document.getElementById('lore-btn-text');
-        const loreBtnSpinner    = document.getElementById('lore-btn-spinner');
-        const statusEl          = document.getElementById('status');
-        const statsEl           = document.getElementById('stats');
-        const modal             = document.getElementById('modal');
-        const modalTitle        = document.getElementById('modal-title');
-        const modalMessage      = document.getElementById('modal-message');
-        const modalCloseBtn     = document.getElementById('modal-close-btn');
-        const playerNameInput   = document.getElementById('player-name');
-        const connectionDot     = document.getElementById('connection-dot');
-        const connectionLabel   = document.getElementById('connection-label');
-        const debugPanel        = document.getElementById('debug-panel');
-        const simulateBtn       = document.getElementById('simulate-btn');
-        const interceptBtn      = document.getElementById('intercept-btn');
-        const hostGameBtn       = document.getElementById('host-game-btn');
-        const joinGameBtn       = document.getElementById('join-game-btn');
-        const roomCodeInput     = document.getElementById('room-code-input');
-        const preJoinUI         = document.getElementById('pre-join-ui');
-        const inSessionUI       = document.getElementById('in-session-ui');
-        const roomCodeDisplay   = document.getElementById('room-code-display');
-        const hostBadge         = document.getElementById('host-badge');
-        const leaveSessionBtn   = document.getElementById('leave-session-btn');
-        const playerListEl      = document.getElementById('player-list');
+        const $ = id => document.getElementById(id);
+        const toggleBtn       = $('toggle-tracking-btn');
+        const generateLoreBtn = $('generate-lore-btn');
+        const loreBtnText     = $('lore-btn-text');
+        const statusEl        = $('status');
+        const runStatusEl     = $('run-status');
+        const statScore       = $('stat-score');
+        const statZones       = $('stat-zones');
+        const statPath        = $('stat-path');
+        const modal           = $('modal');
+        const modalTitle      = $('modal-title');
+        const modalMessage    = $('modal-message');
+        const modalCloseBtn   = $('modal-close-btn');
+        const playerNameInput = $('player-name');
+        const connEl          = $('conn');
+        const connectionLabel = $('connection-label');
+        const debugPanel      = $('debug-panel');
+        const hostGameBtn     = $('host-game-btn');
+        const joinGameBtn     = $('join-game-btn');
+        const roomCodeInput   = $('room-code-input');
+        const roomChip        = $('room-chip');
+        const roomCodeDisplay = $('room-code-display');
+        const leaveSessionBtn = $('leave-session-btn');
+        const playerListEl    = $('player-list');
+        const sheet           = $('sheet');
+        const recenterBtn     = $('recenter-btn');
+        const snackbar        = $('snackbar');
+        const snackbarIcon    = $('snackbar-icon');
+        const snackbarText    = $('snackbar-text');
 
         // ─── Initialization ───────────────────────────────────────────────────
         document.addEventListener('DOMContentLoaded', () => {
@@ -226,11 +738,15 @@
 
             toggleBtn.addEventListener('click', handleToggleTracking);
             generateLoreBtn.addEventListener('click', handleGenerateLore);
-            modalCloseBtn.addEventListener('click', () => modal.classList.add('hidden'));
+            modalCloseBtn.addEventListener('click', closeAlert);
+            modal.addEventListener('click', e => { if (e.target === modal) closeAlert(); });
             playerNameInput.addEventListener('change', handlePlayerNameChange);
             hostGameBtn.addEventListener('click', handleHostGame);
             joinGameBtn.addEventListener('click', handleJoinGame);
             leaveSessionBtn.addEventListener('click', handleLeaveSession);
+            roomChip.addEventListener('click', copyRoomCode);
+            recenterBtn.addEventListener('click', recenter);
+            $('sheet-handle').addEventListener('click', () => sheet.classList.toggle('collapsed'));
             roomCodeInput.addEventListener('input', () => {
                 roomCodeInput.value = roomCodeInput.value.toUpperCase();
             });
@@ -239,11 +755,12 @@
             });
 
             document.addEventListener('keydown', e => {
+                if (e.key === 'Escape' && !modal.hidden) closeAlert();
                 if (e.target.tagName === 'INPUT') return;
-                if (e.key === 'd') debugPanel.classList.toggle('hidden');
+                if (e.key === 'd') debugPanel.hidden = !debugPanel.hidden;
             });
-            simulateBtn.addEventListener('click', simulatePathCapture);
-            interceptBtn.addEventListener('click', simulateInterception);
+            $('simulate-btn').addEventListener('click', simulatePathCapture);
+            $('intercept-btn').addEventListener('click', simulateInterception);
 
             updateUI();
         });
@@ -292,11 +809,15 @@
 
         // ─── Map ──────────────────────────────────────────────────────────────
         function initializeMap() {
-            map = L.map('map').setView([51.505, -0.09], 13);
-            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                maxZoom: 19,
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            const lightQuery = window.matchMedia('(prefers-color-scheme: light)');
+            map = L.map('map', { zoomControl: false, attributionControl: false }).setView([51.505, -0.09], 13);
+            tileLayer = L.tileLayer(lightQuery.matches ? TILES.light : TILES.dark, {
+                subdomains: 'abcd',
+                maxZoom: 20
             }).addTo(map);
+            lightQuery.addEventListener('change', e => tileLayer.setUrl(e.matches ? TILES.light : TILES.dark));
+
+            map.on('dragstart', () => setFollow(false));
 
             if (!window.isSecureContext) {
                 showAlert('HTTPS required',
@@ -305,10 +826,198 @@
             }
 
             navigator.geolocation.getCurrentPosition(
-                ({ coords }) => map.setView([coords.latitude, coords.longitude], 16),
-                () => showAlert('Welcome!', 'Could not get initial location. Map is set to a default view.'),
+                ({ coords }) => {
+                    updateFix(coords);
+                    map.setView(visibleCenterFor(lastFix, 17), 17);
+                },
+                () => showToast('Could not get your location yet', 3000, 'info'),
                 { enableHighAccuracy: true }
             );
+        }
+
+        function setFollow(on) {
+            followMe = on;
+            recenterBtn.classList.toggle('active', on);
+        }
+
+        function recenter() {
+            if (!lastFix) {
+                showToast('Waiting for your location', 2500, 'info');
+                return;
+            }
+            setFollow(true);
+            const zoom = Math.max(map.getZoom(), 17);
+            map.flyTo(visibleCenterFor(lastFix, zoom), zoom, { duration: 0.6 });
+        }
+
+        // Map center that puts `latlng` in the middle of the area not covered by the top bar and sheet
+        function visibleCenterFor(latlng, zoom = map.getZoom()) {
+            const W = window.innerWidth;
+            const H = window.innerHeight;
+            const sheetRect = sheet.getBoundingClientRect();
+            const topbarBottom = document.querySelector('.topbar').getBoundingClientRect().bottom;
+            const offset = W >= 768
+                ? L.point(W / 2 - (sheetRect.right + W) / 2, H / 2 - (topbarBottom + H) / 2)
+                : L.point(0, H / 2 - (topbarBottom + sheetRect.top) / 2);
+            return map.unproject(map.project(latlng, zoom).add(offset), zoom);
+        }
+
+        // ─── Player colors ────────────────────────────────────────────────────
+        function hashColor(name) {
+            let hash = 0;
+            for (let i = 0; i < name.length; i++) {
+                hash = name.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            return PLAYER_COLORS[Math.abs(hash) % PLAYER_COLORS.length];
+        }
+
+        function getPlayerColor(name) {
+            return sessionPlayers.get(name)?.color || hashColor(name);
+        }
+
+        const myColor = () => getPlayerColor(playerName);
+
+        // ─── Own marker & trail ───────────────────────────────────────────────
+        function buildMeIcon() {
+            const el = document.createElement('div');
+            el.className = 'me';
+            el.style.setProperty('--c', myColor());
+            el.innerHTML = '<span class="me-halo"></span><span class="me-heading"></span><span class="me-dot"></span>';
+            return L.divIcon({ html: el, className: 'marker-icon', iconSize: [0, 0], iconAnchor: [0, 0] });
+        }
+
+        function updateFix({ latitude, longitude, accuracy, heading, speed }) {
+            lastFix = { lat: latitude, lng: longitude };
+            const ll = [latitude, longitude];
+
+            if (!meMarker) {
+                accuracyCircle = L.circle(ll, {
+                    radius: accuracy || 0, color: myColor(), weight: 1, opacity: 0.35, fillOpacity: 0.08, interactive: false
+                }).addTo(map);
+                meMarker = L.marker(ll, { icon: buildMeIcon(), interactive: false, keyboard: false, zIndexOffset: 1000 }).addTo(map);
+            } else {
+                meMarker.setLatLng(ll);
+                accuracyCircle.setLatLng(ll).setRadius(accuracy || 0);
+            }
+
+            const headingEl = meMarker.getElement()?.querySelector('.me-heading');
+            if (headingEl) {
+                const moving = Number.isFinite(heading) && (speed == null || speed > 0.5);
+                headingEl.classList.toggle('on', moving);
+                if (moving) headingEl.style.transform = `rotate(${heading}deg)`;
+            }
+        }
+
+        function refreshMyColor() {
+            const c = myColor();
+            if (meMarker) meMarker.setIcon(buildMeIcon());
+            accuracyCircle?.setStyle({ color: c });
+            currentPathPolyline?.setStyle({ color: c });
+            currentPathGlow?.setStyle({ color: c });
+        }
+
+        function drawOwnPath() {
+            if (pathCoordinates.length < 2) {
+                clearOwnPath();
+                return;
+            }
+            if (!currentPathPolyline) {
+                const c = myColor();
+                const style = { color: c, lineCap: 'round', lineJoin: 'round', interactive: false };
+                currentPathGlow = L.polyline(pathCoordinates, { ...style, weight: 12, opacity: 0.18 }).addTo(map);
+                currentPathPolyline = L.polyline(pathCoordinates, { ...style, weight: 4, opacity: 1 }).addTo(map);
+            } else {
+                currentPathGlow.setLatLngs(pathCoordinates);
+                currentPathPolyline.setLatLngs(pathCoordinates);
+            }
+        }
+
+        function clearOwnPath() {
+            if (currentPathPolyline) map.removeLayer(currentPathPolyline);
+            if (currentPathGlow) map.removeLayer(currentPathGlow);
+            currentPathPolyline = null;
+            currentPathGlow = null;
+        }
+
+        // ─── Other players ────────────────────────────────────────────────────
+        function buildPeerIcon(name) {
+            const el = document.createElement('div');
+            el.className = 'peer';
+            el.style.setProperty('--c', getPlayerColor(name));
+            const dot = document.createElement('span');
+            dot.className = 'peer-dot';
+            const label = document.createElement('span');
+            label.className = 'peer-label';
+            label.textContent = name;
+            el.append(dot, label);
+            return L.divIcon({ html: el, className: 'marker-icon', iconSize: [0, 0], iconAnchor: [0, 0] });
+        }
+
+        function updatePeer(name, path) {
+            activePaths.set(name, path);
+            if (!path.length) return;
+
+            let polyline = activePathLayers.get(name);
+            if (!polyline) {
+                polyline = L.polyline(path, {
+                    color: getPlayerColor(name), weight: 3, opacity: 0.9, dashArray: '1 8', lineCap: 'round', interactive: false
+                }).addTo(map);
+                activePathLayers.set(name, polyline);
+            } else {
+                polyline.setLatLngs(path);
+            }
+
+            const last = path[path.length - 1];
+            let marker = peerMarkers.get(name);
+            if (!marker) {
+                marker = L.marker([last.lat, last.lng], { icon: buildPeerIcon(name), interactive: false, keyboard: false, zIndexOffset: 500 }).addTo(map);
+                peerMarkers.set(name, marker);
+            } else {
+                marker.setLatLng([last.lat, last.lng]);
+            }
+            marker.getElement()?.querySelector('.peer')?.classList.remove('stale');
+        }
+
+        // Trail gone (captured, cut, or stopped); keep their last position but dim it
+        function clearPeerPath(name) {
+            const layer = activePathLayers.get(name);
+            if (layer) map.removeLayer(layer);
+            activePathLayers.delete(name);
+            activePaths.delete(name);
+            peerMarkers.get(name)?.getElement()?.querySelector('.peer')?.classList.add('stale');
+        }
+
+        function removePeer(name) {
+            clearPeerPath(name);
+            const marker = peerMarkers.get(name);
+            if (marker) map.removeLayer(marker);
+            peerMarkers.delete(name);
+        }
+
+        function renderTerritory(data, { fresh = false } = {}) {
+            const isOwn = data.owner === playerName;
+            const color = data.color || getPlayerColor(data.owner);
+
+            const polygon = L.polygon(data.coords, {
+                color,
+                weight: 2,
+                opacity: 0.9,
+                fillColor: color,
+                fillOpacity: isOwn ? 0.22 : 0.14,
+                lineJoin: 'round'
+            }).addTo(map);
+            if (fresh) polygon.getElement()?.classList.add('territory-new');
+
+            const territory = { ...data, polygon };
+            polygon.on('click', () => {
+                const loreText = territory.lore ? `\n\n${territory.lore}` : '';
+                showAlert(
+                    isOwn ? 'Your territory' : `${territory.owner}'s territory`,
+                    `${Math.round(territory.area).toLocaleString()} m²${loreText}`
+                );
+            });
+
+            territories.push(territory);
         }
 
         // ─── Socket.IO ────────────────────────────────────────────────────────
@@ -324,7 +1033,7 @@
             });
             socket.on('disconnect', () => {
                 setConnectionStatus(false);
-                if (roomCode) showToast('Connection lost. Reconnecting...', 4000);
+                if (roomCode) showToast('Connection lost. Reconnecting…', 4000);
             });
 
             socket.on('room:joined',              handleRoomJoined);
@@ -347,26 +1056,22 @@
 
             roomCode = code;
             isHost = amHost;
+            hostName = roomState.hostName;
 
             sessionPlayers.clear();
             for (const p of roomState.players) {
                 sessionPlayers.set(p.name, { color: p.color, score: p.score });
             }
             score = sessionPlayers.get(playerName)?.score || 0;
+            refreshMyColor();
 
             for (const t of roomState.territories) renderTerritory(t);
             for (const { playerName: name, path } of roomState.activePaths) {
-                if (name === playerName) continue;
-                activePaths.set(name, path);
-                updateActivePathOnMap(name, path);
+                if (name !== playerName) updatePeer(name, path);
             }
 
-            preJoinUI.classList.add('hidden');
-            inSessionUI.classList.remove('hidden');
             roomCodeDisplay.textContent = code;
-            hostBadge.classList.toggle('hidden', !amHost);
             playerNameInput.disabled = true;
-            toggleBtn.disabled = false;
 
             updatePlayerList();
             updateUI();
@@ -375,14 +1080,15 @@
                 showToast('Reconnected', 2000, 'success');
                 if (isTracking) syncActivePath();
             } else {
-                showToast(`Room ${code}: ${amHost ? 'you are the host. Share the code!' : 'you joined the game.'}`, 4000, 'success');
+                showToast(amHost ? `Room ${code} created. Share the code!` : `Joined room ${code}`, 4000, 'success');
             }
         }
 
         function handleRoomNotFound({ code }) {
             if (roomCode) {
+                const closed = roomCode;
                 resetSession();
-                showAlert('Room closed', `Room ${roomCode} no longer exists. Host or join a new game.`);
+                showAlert('Room closed', `Room ${closed} no longer exists. Host or join a new game.`);
             } else {
                 showToast(`Room "${code}" not found`, 4000);
             }
@@ -391,37 +1097,35 @@
         function handlePlayerJoined({ player }) {
             sessionPlayers.set(player.name, { color: player.color, score: player.score || 0 });
             updatePlayerList();
-            showToast(`${player.name} joined the room`, 3000, 'info');
+            showToast(`${player.name} joined`, 3000, 'info');
         }
 
         function handlePlayerLeft({ playerName: name }) {
             sessionPlayers.delete(name);
             updatePlayerList();
-            removeActivePath(name);
-            showToast(`${name} left the room`, 3000, 'info');
+            removePeer(name);
+            showToast(`${name} left`, 3000, 'info');
         }
 
         function handleHostChanged({ newHostName }) {
+            hostName = newHostName;
             isHost = (newHostName === playerName);
-            hostBadge.classList.toggle('hidden', !isHost);
+            updatePlayerList();
             showToast(isHost ? 'You are now the host' : `${newHostName} is now the host`, 4000, 'info');
         }
 
         // ── Path events ───────────────────────────────────────────────────────
         function handleRemotePathUpdated({ playerName: name, path }) {
-            if (name === playerName) return;
-            activePaths.set(name, path);
-            updateActivePathOnMap(name, path);
+            if (name !== playerName) updatePeer(name, path);
         }
 
         function handleRemotePathDeleted({ playerName: name }) {
-            if (name === playerName) return;
-            removeActivePath(name);
+            if (name !== playerName) clearPeerPath(name);
         }
 
         // ── Territory events ──────────────────────────────────────────────────
         function handleTerritoryCaptured({ territory, captorName, points, captorScore }) {
-            if (!territories.some(t => t.id === territory.id)) renderTerritory(territory);
+            if (!territories.some(t => t.id === territory.id)) renderTerritory(territory, { fresh: true });
 
             const sp = sessionPlayers.get(captorName);
             if (sp) sp.score = captorScore;
@@ -429,10 +1133,10 @@
 
             if (captorName === playerName) {
                 score = captorScore;
-                generateLoreBtn.classList.remove('hidden');
-                showToast(`Territory captured! +${points} points`, 3000, 'success');
+                document.body.classList.add('can-lore');
+                showToast(`Territory captured · +${points}`, 3000, 'success');
             } else {
-                showToast(`${captorName} captured a territory! (+${points})`, 3000, 'info');
+                showToast(`${captorName} captured territory · +${points}`, 3000, 'info');
             }
             updateUI();
         }
@@ -444,24 +1148,22 @@
 
             if (victimName === playerName) {
                 pathCoordinates = [];
-                if (currentPathPolyline) {
-                    map.removeLayer(currentPathPolyline);
-                    currentPathPolyline = null;
-                }
-                showToast(`Your path was cut by ${interceptorName}!`, 4000);
+                clearOwnPath();
+                updateUI();
+                showToast(`${interceptorName} cut your trail`, 4000);
             } else {
-                removeActivePath(victimName);
+                clearPeerPath(victimName);
                 if (interceptorName === playerName) {
                     score = interceptorScore;
                     updateUI();
-                    showToast(`You cut ${victimName}'s path! +10`, 3000, 'success');
+                    showToast(`You cut ${victimName}'s trail · +10`, 3000, 'success');
                 } else {
-                    showToast(`${interceptorName} cut ${victimName}'s path!`, 2500, 'info');
+                    showToast(`${interceptorName} cut ${victimName}'s trail`, 2500, 'info');
                 }
             }
         }
 
-        // ─── Session button handlers ──────────────────────────────────────────
+        // ─── Session actions ──────────────────────────────────────────────────
         function readPlayerName() {
             const name = playerNameInput.value.trim().slice(0, 20);
             if (!name) {
@@ -501,16 +1203,18 @@
                 stopPathSyncing();
             }
             clearRoomFromMap();
+            pathCoordinates = [];
+            clearOwnPath();
             roomCode = null;
             isHost = false;
+            hostName = null;
             score = 0;
             sessionPlayers.clear();
+            refreshMyColor();
 
-            preJoinUI.classList.remove('hidden');
-            inSessionUI.classList.add('hidden');
-            generateLoreBtn.classList.add('hidden');
+            document.body.classList.remove('can-lore');
+            sheet.classList.remove('collapsed');
             playerNameInput.disabled = false;
-            toggleBtn.disabled = true;
             updateUI();
         }
 
@@ -519,8 +1223,19 @@
                 if (t.polygon) map.removeLayer(t.polygon);
             }
             territories = [];
-            for (const name of [...activePathLayers.keys()]) removeActivePath(name);
+            for (const name of new Set([...peerMarkers.keys(), ...activePathLayers.keys()])) removePeer(name);
             activePaths.clear();
+        }
+
+        function copyRoomCode() {
+            if (!roomCode) return;
+            if (navigator.clipboard?.writeText) {
+                navigator.clipboard.writeText(roomCode)
+                    .then(() => showToast(`Room code ${roomCode} copied`, 2000, 'success'))
+                    .catch(() => showToast(`Room code: ${roomCode}`, 3000, 'info'));
+            } else {
+                showToast(`Room code: ${roomCode}`, 3000, 'info');
+            }
         }
 
         // ─── Tracking ─────────────────────────────────────────────────────────
@@ -532,16 +1247,21 @@
             }
 
             isTracking = !isTracking;
-            updateUI();
 
             if (isTracking) {
                 startWatchingPosition();
                 startPathSyncing();
+                sheet.classList.add('collapsed');
+                setFollow(true);
             } else {
                 stopWatchingPosition();
                 stopPathSyncing();
                 socket.emit('path:delete');
+                pathCoordinates = [];
+                clearOwnPath();
+                sheet.classList.remove('collapsed');
             }
+            updateUI();
         }
 
         function handlePlayerNameChange() {
@@ -549,16 +1269,15 @@
             if (newName && newName !== playerName && !roomCode) {
                 playerName = newName;
                 savePlayerName();
+                refreshMyColor();
             }
         }
 
         function startWatchingPosition() {
             pathCoordinates = [];
-            if (currentPathPolyline) {
-                map.removeLayer(currentPathPolyline);
-                currentPathPolyline = null;
-            }
-            generateLoreBtn.classList.add('hidden');
+            clearOwnPath();
+            document.body.classList.remove('can-lore');
+            setRunStatus('waiting', 'Finding GPS signal…');
 
             watchId = navigator.geolocation.watchPosition(
                 onLocationSuccess,
@@ -593,27 +1312,39 @@
         }
 
         function onLocationSuccess(position) {
-            const { latitude, longitude, accuracy } = position.coords;
-            if (accuracy > MAX_ACCURACY_M) return;
-            statusEl.textContent = 'Currently Tracking Your Path...';
-            const newCoord = { lat: latitude, lng: longitude };
+            const coords = position.coords;
+            updateFix(coords);
+
+            if (coords.accuracy > MAX_ACCURACY_M) {
+                setRunStatus('waiting', 'Weak GPS signal · move into the open');
+                return;
+            }
+            setRunStatus('tracking', 'Tracking · close a loop to claim it');
+
+            const newCoord = { lat: coords.latitude, lng: coords.longitude };
 
             if (pathCoordinates.length > 0) {
                 const last = pathCoordinates[pathCoordinates.length - 1];
                 const dist = turf.distance(
                     turf.point([last.lng, last.lat]),
-                    turf.point([longitude, latitude]),
+                    turf.point([newCoord.lng, newCoord.lat]),
                     { units: 'meters' }
                 );
                 if (dist < JITTER_THRESHOLD_M) return;
             }
 
-            if (pathCoordinates.length === 0) {
-                map.setView(newCoord, 18);
+            if (followMe) {
+                if (pathCoordinates.length === 0) {
+                    const zoom = Math.max(map.getZoom(), 18);
+                    map.setView(visibleCenterFor(newCoord, zoom), zoom);
+                } else {
+                    map.panTo(visibleCenterFor(newCoord));
+                }
             }
 
             pathCoordinates.push(newCoord);
-            updateMapElements(newCoord);
+            drawOwnPath();
+            updatePathStat();
 
             checkForInterception();
             checkForTerritoryCapture(pathCoordinates);
@@ -622,68 +1353,15 @@
         function onLocationError(error) {
             // Brief GPS dropouts (tunnels, tall buildings) are normal; only give up if permission is denied
             if (error.code !== error.PERMISSION_DENIED) {
-                statusEl.textContent = 'Waiting for GPS signal...';
+                setRunStatus('waiting', 'Waiting for GPS signal…');
                 return;
             }
             stopWatchingPosition();
             stopPathSyncing();
             isTracking = false;
+            sheet.classList.remove('collapsed');
             updateUI();
-            showAlert('Location Error', 'Could not get your location. Please enable location services and allow access.');
-        }
-
-        // ─── Map drawing ──────────────────────────────────────────────────────
-        function updateMapElements(coord) {
-            if (!userMarker) {
-                userMarker = L.marker(coord).addTo(map).bindPopup('You are here!').openPopup();
-            } else {
-                userMarker.setLatLng(coord);
-            }
-
-            if (pathCoordinates.length > 1) {
-                if (!currentPathPolyline) {
-                    currentPathPolyline = L.polyline(pathCoordinates, { color: USER_COLOR, weight: 5 }).addTo(map);
-                } else {
-                    currentPathPolyline.setLatLngs(pathCoordinates);
-                }
-            }
-        }
-
-        function updateActivePathOnMap(name, path) {
-            let polyline = activePathLayers.get(name);
-            if (!polyline) {
-                polyline = L.polyline(path, { color: getPlayerColor(name), weight: 4, dashArray: '5,10', opacity: 0.7 }).addTo(map);
-                activePathLayers.set(name, polyline);
-            } else {
-                polyline.setLatLngs(path);
-            }
-        }
-
-        function removeActivePath(name) {
-            const layer = activePathLayers.get(name);
-            if (layer) map.removeLayer(layer);
-            activePathLayers.delete(name);
-            activePaths.delete(name);
-        }
-
-        function renderTerritory(data) {
-            const isOwn = data.owner === playerName;
-            const color = isOwn ? USER_COLOR : getPlayerColor(data.owner);
-
-            const polygon = L.polygon(data.coords, {
-                color,
-                fillColor: isOwn ? TERRITORY_COLOR : color,
-                fillOpacity: isOwn ? 0.5 : 0.25,
-                weight: 2
-            }).addTo(map);
-
-            const territory = { ...data, polygon };
-            polygon.on('click', () => {
-                const loreText = territory.lore ? `\n\nLore: ${territory.lore}` : '';
-                showAlert(`Territory by ${territory.owner}`, `Area: ${Math.round(territory.area)} m²${loreText}`);
-            });
-
-            territories.push(territory);
+            showAlert('Location access needed', 'Allow location access for this site in your browser settings, then press Start again.');
         }
 
         // ─── Interception detection (server makes the final call) ─────────────
@@ -749,7 +1427,8 @@
                 });
 
                 pathCoordinates = [{ lat: intersectionPoint[1], lng: intersectionPoint[0] }];
-                if (currentPathPolyline) currentPathPolyline.setLatLngs(pathCoordinates);
+                drawOwnPath();
+                updatePathStat();
                 return;
             }
         }
@@ -760,7 +1439,7 @@
                 .filter(t => t.owner === playerName)
                 .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0];
 
-            if (!lastTerritory) { showAlert('Error', 'No territory captured yet!'); return; }
+            if (!lastTerritory) { showAlert('No territory yet', 'Capture a territory first.'); return; }
 
             setLoreButtonLoading(true);
 
@@ -781,7 +1460,7 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Lore request failed');
                 lastTerritory.lore = data.text;
-                showAlert('Territory Lore', data.text);
+                showAlert('Territory lore', data.text);
             } catch (error) {
                 console.error('Lore error:', error);
                 showAlert('Lore unavailable', error.message);
@@ -792,72 +1471,99 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
 
         function setLoreButtonLoading(isLoading) {
             generateLoreBtn.disabled = isLoading;
-            loreBtnText.classList.toggle('hidden', isLoading);
-            loreBtnSpinner.classList.toggle('hidden', !isLoading);
+            loreBtnText.textContent = isLoading ? 'Writing lore…' : 'Generate territory lore';
         }
 
         // ─── UI helpers ───────────────────────────────────────────────────────
         function updateUI() {
-            if (isTracking) {
-                toggleBtn.textContent = 'Stop';
-                toggleBtn.classList.replace('bg-green-500', 'bg-red-500');
-                toggleBtn.classList.replace('hover:bg-green-600', 'hover:bg-red-600');
-                statusEl.textContent = 'Currently Tracking Your Path...';
-            } else {
-                toggleBtn.textContent = 'Start';
-                toggleBtn.classList.replace('bg-red-500', 'bg-green-500');
-                toggleBtn.classList.replace('hover:bg-red-600', 'hover:bg-green-600');
-                statusEl.textContent = roomCode ? 'Press Start to Begin' : 'Join or host a game to play';
-            }
+            document.body.classList.toggle('in-session', !!roomCode);
+            document.body.classList.toggle('tracking', isTracking);
 
-            const myCount = territories.filter(t => t.owner === playerName).length;
-            statsEl.textContent = `Captured Territories: ${myCount} | Score: ${score}`;
+            toggleBtn.className = `btn btn-block btn-lg state ${isTracking ? 'btn-danger' : 'btn-filled'}`;
+            toggleBtn.innerHTML = isTracking
+                ? '<span class="icon filled" aria-hidden="true">stop</span>Stop run'
+                : '<span class="icon filled" aria-hidden="true">play_arrow</span>Start run';
+            if (!isTracking) setRunStatus('idle', 'Press start and walk a loop');
+
+            statScore.textContent = score.toLocaleString();
+            statZones.textContent = territories.filter(t => t.owner === playerName).length;
+            updatePathStat();
+        }
+
+        function updatePathStat() {
+            const meters = pathCoordinates.length > 1
+                ? turf.length(turf.lineString(pathCoordinates.map(p => [p.lng, p.lat])), { units: 'meters' })
+                : 0;
+            statPath.innerHTML = meters < 1000
+                ? `${Math.round(meters)}<small>m</small>`
+                : `${(meters / 1000).toFixed(1)}<small>km</small>`;
+        }
+
+        function setRunStatus(state, text) {
+            runStatusEl.dataset.state = state;
+            statusEl.textContent = text;
         }
 
         function updatePlayerList() {
-            playerListEl.innerHTML = '';
+            playerListEl.replaceChildren();
             const sorted = [...sessionPlayers.entries()].sort((a, b) => b[1].score - a[1].score);
             for (const [name, info] of sorted) {
-                const chip = document.createElement('span');
-                chip.className = 'px-2 py-0.5 rounded-full text-white text-xs font-medium';
-                chip.style.backgroundColor = info.color;
-                chip.textContent = `${name === playerName ? `${name} (you)` : name} · ${info.score}`;
-                playerListEl.appendChild(chip);
+                const li = document.createElement('li');
+                li.className = 'player';
+
+                const swatch = document.createElement('span');
+                swatch.className = 'swatch';
+                swatch.style.background = info.color;
+
+                const nameEl = document.createElement('span');
+                nameEl.className = 'player-name';
+                nameEl.textContent = name;
+                if (name === hostName) {
+                    const crown = document.createElement('span');
+                    crown.className = 'icon filled host-icon';
+                    crown.textContent = 'star';
+                    crown.title = 'Host';
+                    nameEl.append(crown);
+                }
+                if (name === playerName) {
+                    const tag = document.createElement('span');
+                    tag.className = 'tag';
+                    tag.textContent = 'You';
+                    nameEl.append(tag);
+                }
+
+                const scoreEl = document.createElement('span');
+                scoreEl.className = 'player-score';
+                scoreEl.textContent = info.score.toLocaleString();
+
+                li.append(swatch, nameEl, scoreEl);
+                playerListEl.append(li);
             }
         }
 
         function setConnectionStatus(connected) {
-            connectionDot.style.color = connected ? '#10b981' : '#ef4444';
-            connectionLabel.textContent = connected ? 'Connected' : 'Offline';
+            connEl.classList.toggle('online', connected);
+            connectionLabel.textContent = connected ? 'Online' : 'Offline';
         }
 
         function showAlert(title, message) {
             modalTitle.textContent = title;
             modalMessage.textContent = message;
-            modal.classList.remove('hidden');
+            modal.hidden = false;
+            modalCloseBtn.focus();
         }
 
+        function closeAlert() {
+            modal.hidden = true;
+        }
+
+        let snackTimer = null;
         function showToast(message, duration = 3000, type = 'error') {
-            document.querySelectorAll('.toast').forEach(t => t.remove());
-
-            const toast = document.createElement('div');
-            toast.className = `toast ${type}`;
-            toast.textContent = message;
-            document.body.appendChild(toast);
-
-            setTimeout(() => toast.classList.add('show'), 10);
-            setTimeout(() => {
-                toast.classList.remove('show');
-                setTimeout(() => toast.remove(), 300);
-            }, duration);
-        }
-
-        function getPlayerColor(name) {
-            let hash = 0;
-            for (let i = 0; i < name.length; i++) {
-                hash = name.charCodeAt(i) + ((hash << 5) - hash);
-            }
-            return `hsl(${Math.abs(hash) % 360}, 70%, 45%)`;
+            snackbarIcon.textContent = { success: 'check_circle', info: 'info', error: 'error' }[type] || 'info';
+            snackbarText.textContent = message;
+            snackbar.classList.add('show');
+            clearTimeout(snackTimer);
+            snackTimer = setTimeout(() => snackbar.classList.remove('show'), duration);
         }
 
         // ─── Debug helpers ────────────────────────────────────────────────────
@@ -872,8 +1578,7 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
                 { lat: c.lat + s, lng: c.lng - s },
                 { lat: c.lat - s * 1.5, lng: c.lng - s * 0.5 }
             ];
-            if (currentPathPolyline) map.removeLayer(currentPathPolyline);
-            currentPathPolyline = L.polyline(pathCoordinates, { color: USER_COLOR, weight: 5 }).addTo(map);
+            drawOwnPath();
             checkForTerritoryCapture(pathCoordinates);
         }
 

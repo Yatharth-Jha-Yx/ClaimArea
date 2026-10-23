@@ -40,3 +40,4 @@ GEMINI_API_KEY=your-key npm start
 - Rooms live in server memory. Restarting the server ends all games.
 - An empty room is kept for 2 minutes so a host with a flaky connection can rejoin.
 - If the host leaves, the longest-connected player becomes host.
+- The map uses CARTO's Dark Matter / Positron tiles (switching with the device's light or dark mode). They're free for non-commercial use with attribution; a commercial launch needs a CARTO license or another tile provider.
