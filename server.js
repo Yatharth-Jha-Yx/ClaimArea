@@ -117,7 +117,7 @@ function roomSnapshot(room) {
     return {
         hostName: hostName(room),
         players: [...room.players.values()].map(p => ({ name: p.name, color: p.color, score: p.score })),
-        territories: [...room.territories.values()],
+        territories: [...room.territories.values()].map(territoryView),
         activePaths: [...room.players.values()]
             .filter(p => p.activePath.length > 1)
             .map(p => ({ playerName: p.name, path: p.activePath }))
@@ -282,7 +282,7 @@ io.on('connection', (socket) => {
         socket.to(ctx.room.code).emit('path:deleted', { playerName: ctx.player.name });
     });
 
-    on('territory:claim', ({ id, coords, center, area }) => {
+    on('territory:claim', ({ id, coords, area }) => {
         const ctx = getContext(socket);
         if (!ctx) return;
         const { room, player } = ctx;
@@ -293,36 +293,30 @@ io.on('connection', (socket) => {
             return socket.emit('territory:claim_rejected', { id, reason: 'Invalid territory' });
         }
 
-        const validation = validateTerritory(room, ring, Number(area));
-        if (!validation.valid) {
-            return socket.emit('territory:claim_rejected', { id: territoryId, reason: validation.reason });
+        const claim = parseClaim(ring, Number(area));
+        if (!claim.valid) {
+            return socket.emit('territory:claim_rejected', { id: territoryId, reason: claim.reason });
         }
 
-        const territory = {
-            id: territoryId,
-            coords: ring,
-            center: validation.center,
-            area: validation.serverArea,
-            owner: player.name,
-            color: player.color,
-            timestamp: new Date().toISOString(),
-            lore: null
-        };
-        room.territories.set(territoryId, territory);
-
-        const points = Math.max(1, Math.round(validation.serverArea / 100));
-        player.score += points;
+        const result = applyClaim(room, player, territoryId, claim.polygon);
+        if (!result) {
+            return socket.emit('territory:claim_rejected', { id: territoryId, reason: 'That area is already yours' });
+        }
 
         player.activePath = [];
         socket.to(room.code).emit('path:deleted', { playerName: player.name });
 
         io.to(room.code).emit('territory:captured', {
-            territory,
+            territory: territoryView(result.territory),
             captorName: player.name,
-            points,
-            captorScore: player.score
+            points: result.points,
+            removed: result.removed,
+            updated: result.updated.map(territoryView),
+            stolen: result.stolen,
+            scores: result.scores
         });
-        console.log(`[${room.code}] ${player.name} captured ${territoryId} (${Math.round(validation.serverArea)}m², +${points})`);
+        const took = result.stolen.map(s => `${s.area}m² from ${s.owner}`).join(', ');
+        console.log(`[${room.code}] ${player.name} captured ${territoryId} (+${result.points})${took ? `, took ${took}` : ''}`);
     });
 
     on('path:intercept', ({ targetPlayer, path: p }) => {
@@ -373,35 +367,142 @@ function toGeoJsonPolygon(latLngRing) {
     return turf.polygon([ring]);
 }
 
-function validateTerritory(room, latLngRing, clientArea) {
-    let polygon;
+function parseClaim(latLngRing, clientArea) {
+    let raw;
     try {
-        polygon = toGeoJsonPolygon(latLngRing);
+        raw = toGeoJsonPolygon(latLngRing);
     } catch (_) {
         return { valid: false, reason: 'Invalid polygon geometry' };
     }
 
-    const serverArea = turf.area(polygon);
-    if (serverArea < MIN_TERRITORY_AREA_M2) {
-        return { valid: false, reason: `Territory too small (min ${MIN_TERRITORY_AREA_M2}m²)` };
-    }
-    if (!Number.isFinite(clientArea) || Math.abs(serverArea - clientArea) > serverArea * 0.2) {
+    const rawArea = turf.area(raw);
+    if (!Number.isFinite(clientArea) || Math.abs(rawArea - clientArea) > Math.max(rawArea, clientArea) * 0.2) {
         return { valid: false, reason: 'Area mismatch' };
     }
 
-    for (const existing of room.territories.values()) {
+    // Unioning a shape with itself resolves a self-crossing loop (figure-8) into valid polygons
+    let polygon;
+    try {
+        polygon = turf.union(raw, raw);
+    } catch (_) {
+        return { valid: false, reason: 'Invalid polygon geometry' };
+    }
+    if (!polygon || turf.area(polygon) < MIN_TERRITORY_AREA_M2) {
+        return { valid: false, reason: `Territory too small (min ${MIN_TERRITORY_AREA_M2}m²)` };
+    }
+    return { valid: true, polygon };
+}
+
+// Territories never overlap: a claim takes the overlapping land from other players and
+// merges with the claimer's own land. Returns null if it adds no meaningful new area.
+function applyClaim(room, player, id, claimed) {
+    const asFeature = t => turf.feature(t.geometry);
+
+    let merged = claimed;
+    let ownAreaBefore = 0;
+    const mergedIds = [];
+    for (const t of room.territories.values()) {
+        if (t.owner !== player.name) continue;
         try {
-            const overlap = turf.intersect(polygon, toGeoJsonPolygon(existing.coords));
-            if (overlap && turf.area(overlap) > serverArea * 0.5) {
-                return { valid: false, reason: 'Overlaps an existing territory' };
-            }
+            if (!turf.intersect(merged, asFeature(t))) continue;
+            merged = turf.union(merged, asFeature(t));
         } catch (_) {
-            // Self-intersecting shapes can make intersect throw; skip that comparison
+            continue;
         }
+        ownAreaBefore += t.area;
+        mergedIds.push(t.id);
     }
 
-    const [lng, lat] = turf.centerOfMass(polygon).geometry.coordinates;
-    return { valid: true, serverArea, center: [lat, lng] };
+    const newArea = turf.area(merged) - ownAreaBefore;
+    if (newArea < MIN_TERRITORY_AREA_M2) return null;
+
+    const removed = [...mergedIds];
+    const updated = [];
+    const stolen = [];
+    const penalties = new Map();
+
+    for (const t of [...room.territories.values()]) {
+        if (t.owner === player.name) continue;
+        let rest;
+        try {
+            if (!turf.intersect(claimed, asFeature(t))) continue;
+            rest = dropSlivers(turf.difference(asFeature(t), claimed));
+        } catch (_) {
+            continue;
+        }
+        const lost = t.area - (rest ? turf.area(rest) : 0);
+        if (lost <= 0) continue;
+
+        if (rest) {
+            setTerritoryGeometry(t, rest);
+            updated.push(t);
+        } else {
+            room.territories.delete(t.id);
+            removed.push(t.id);
+        }
+        stolen.push({ owner: t.owner, area: Math.round(lost) });
+        penalties.set(t.owner, (penalties.get(t.owner) || 0) + lost);
+    }
+
+    for (const oldId of mergedIds) room.territories.delete(oldId);
+
+    const territory = {
+        id,
+        owner: player.name,
+        color: player.color,
+        timestamp: new Date().toISOString(),
+        lore: null
+    };
+    setTerritoryGeometry(territory, merged);
+    room.territories.set(id, territory);
+
+    const points = Math.max(1, Math.round(newArea / 100));
+    player.score += points;
+    const scores = { [player.name]: player.score };
+    for (const [owner, lostArea] of penalties) {
+        const newScore = adjustScore(room, owner, -Math.round(lostArea / 100));
+        if (newScore !== null) scores[owner] = newScore;
+    }
+
+    return { territory, points, removed, updated, stolen, scores };
+}
+
+function adjustScore(room, name, delta) {
+    const live = [...room.players.values()].find(p => p.name === name);
+    const record = live || room.retired.get(name);
+    if (!record) return null;
+    record.score = Math.max(0, record.score + delta);
+    return live ? live.score : null;
+}
+
+const MIN_REMNANT_M2 = 25;
+
+// Drops leftover slivers too small to matter after land is taken
+function dropSlivers(feature) {
+    if (!feature) return null;
+    const polygons = feature.geometry.type === 'Polygon'
+        ? [feature.geometry.coordinates]
+        : feature.geometry.coordinates;
+    const kept = polygons.filter(coords => turf.area(turf.polygon(coords)) >= MIN_REMNANT_M2);
+    if (kept.length === 0) return null;
+    return kept.length === 1 ? turf.polygon(kept[0]) : turf.multiPolygon(kept);
+}
+
+function setTerritoryGeometry(territory, feature) {
+    const toLatLng = ring => ring.map(([lng, lat]) => [lat, lng]);
+    const g = feature.geometry;
+    territory.geometry = g;
+    territory.coords = g.type === 'Polygon'
+        ? g.coordinates.map(toLatLng)
+        : g.coordinates.map(poly => poly.map(toLatLng));
+    territory.area = turf.area(feature);
+    const [lng, lat] = turf.centerOfMass(feature).geometry.coordinates;
+    territory.center = [lat, lng];
+}
+
+// What clients receive: Leaflet-ready coords, without the server's GeoJSON copy
+function territoryView({ geometry, ...rest }) {
+    return rest;
 }
 
 // ─── Room cleanup ─────────────────────────────────────────────────────────────

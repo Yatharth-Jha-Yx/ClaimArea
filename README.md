@@ -2,7 +2,11 @@
 
 A real-world GPS territory game. Walk a loop to capture the area inside it. Cross another player's live path to cut it and steal +10 points.
 
-**Closing a loop:** press Start, walk around a block, and come back within 20 m of where you started (or cross your own trail). The map shows your start point, a dashed line back to it, and a preview of the area you'll claim. Loops must enclose at least 100 m². Keep the game open while you walk: the screen stays on automatically during a run, because phones pause GPS for locked or background browser tabs.
+**Closing a loop:** press Start, walk around a block, and come back within 20 m of where you started (or cross your own trail). The map shows your start point, a dashed line back to it, and a preview of the area you'll claim. Loops must enclose at least 100 m².
+
+**Owning land:** claimed land is filled with your color. A loop that overlaps another player's land takes that part (it turns your color, and they lose the points for it). A loop that overlaps your own land merges with it. You score 1 point per 100 m² of new land, plus 10 for cutting someone's live trail.
+
+Keep the game open while you walk: the screen stays on automatically during a run, because phones pause GPS for locked or background browser tabs.
 
 One player hosts a room and shares the 4-letter code; everyone else joins with it. The Node server holds the room state and validates every capture and cut.
 

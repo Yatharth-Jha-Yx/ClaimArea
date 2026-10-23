@@ -608,7 +608,7 @@
         <div id="in-session-ui">
             <div class="stats">
                 <div class="stat"><div class="stat-label">Score</div><div id="stat-score" class="stat-value">0</div></div>
-                <div class="stat"><div class="stat-label">Zones</div><div id="stat-zones" class="stat-value">0</div></div>
+                <div class="stat"><div class="stat-label">Area</div><div id="stat-area" class="stat-value">0<small>m²</small></div></div>
                 <div class="stat"><div class="stat-label">Trail</div><div id="stat-path" class="stat-value">0<small>m</small></div></div>
             </div>
             <div id="run-status" class="run-status" data-state="idle">
@@ -713,7 +713,7 @@
         const statusEl        = $('status');
         const runStatusEl     = $('run-status');
         const statScore       = $('stat-score');
-        const statZones       = $('stat-zones');
+        const statArea        = $('stat-area');
         const statPath        = $('stat-path');
         const modal           = $('modal');
         const modalTitle      = $('modal-title');
@@ -1043,9 +1043,9 @@
             const polygon = L.polygon(data.coords, {
                 color,
                 weight: 2,
-                opacity: 0.9,
+                opacity: 0.95,
                 fillColor: color,
-                fillOpacity: isOwn ? 0.22 : 0.14,
+                fillOpacity: isOwn ? 0.32 : 0.26,
                 lineJoin: 'round'
             }).addTo(map);
             if (fresh) polygon.getElement()?.classList.add('territory-new');
@@ -1168,17 +1168,38 @@
         }
 
         // ── Territory events ──────────────────────────────────────────────────
-        function handleTerritoryCaptured({ territory, captorName, points, captorScore }) {
+        function handleTerritoryCaptured({ territory, captorName, points, removed = [], updated = [], stolen = [], scores = {} }) {
+            // Land merged into the new territory, or taken completely
+            const gone = new Set(removed);
+            for (const t of territories) {
+                if (gone.has(t.id) && t.polygon) map.removeLayer(t.polygon);
+            }
+            territories = territories.filter(t => !gone.has(t.id));
+
+            // Land that lost part of its area to the claim
+            for (const change of updated) {
+                const t = territories.find(x => x.id === change.id);
+                if (!t) continue;
+                Object.assign(t, { coords: change.coords, area: change.area, center: change.center });
+                t.polygon.setLatLngs(change.coords);
+            }
+
             if (!territories.some(t => t.id === territory.id)) renderTerritory(territory, { fresh: true });
 
-            const sp = sessionPlayers.get(captorName);
-            if (sp) sp.score = captorScore;
+            for (const [name, value] of Object.entries(scores)) {
+                const sp = sessionPlayers.get(name);
+                if (sp) sp.score = value;
+                if (name === playerName) score = value;
+            }
             updatePlayerList();
 
+            const lostByMe = stolen.filter(s => s.owner === playerName).reduce((sum, s) => sum + s.area, 0);
             if (captorName === playerName) {
-                score = captorScore;
                 document.body.classList.add('can-lore');
-                showToast(`Territory captured · +${points}`, 3000, 'success');
+                const took = stolen.reduce((sum, s) => sum + s.area, 0);
+                showToast(took ? `Territory captured · took ${took.toLocaleString()} m² · +${points}` : `Territory captured · +${points}`, 3000, 'success');
+            } else if (lostByMe) {
+                showToast(`${captorName} took ${lostByMe.toLocaleString()} m² of your land`, 4000);
             } else {
                 showToast(`${captorName} captured territory · +${points}`, 3000, 'info');
             }
@@ -1592,7 +1613,10 @@ Invent a name for the area, and describe a mythical event, a forgotten ruin, a n
             if (!isTracking) setRunStatus('idle', 'Press start and walk a loop');
 
             statScore.textContent = score.toLocaleString();
-            statZones.textContent = territories.filter(t => t.owner === playerName).length;
+            const ownedArea = territories.filter(t => t.owner === playerName).reduce((sum, t) => sum + t.area, 0);
+            statArea.innerHTML = ownedArea < 10000
+                ? `${Math.round(ownedArea).toLocaleString()}<small>m²</small>`
+                : `${(ownedArea / 1000).toFixed(1)}k<small>m²</small>`;
             updatePathStat();
         }
 
